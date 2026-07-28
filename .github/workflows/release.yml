@@ -1,0 +1,79 @@
+# Builds, signs, notarizes, and publishes Shiftly.app when a v* tag is pushed.
+#
+# Required repository secrets:
+#   MACOS_CERTIFICATE           base64 of a Developer ID Application .p12
+#                               (export from Keychain Access, then `base64 -i cert.p12`)
+#   MACOS_CERTIFICATE_PASSWORD  password used when exporting the .p12
+#   APPLE_ID                    Apple ID email for notarization
+#   APPLE_TEAM_ID               10-char team id (visible on developer.apple.com/account)
+#   APPLE_APP_PASSWORD          app-specific password for the Apple ID
+#                               (create at appleid.apple.com, Sign-In and Security)
+#
+# Cut a release with:
+#   git tag v1.0.0 && git push origin v1.0.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
+
+      - name: Build and sign
+        run: |
+          IDENTITY=$(security find-identity -p codesigning -v | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
+          SIGN_IDENTITY="$IDENTITY" ./build.sh
+          codesign --verify --strict build/Shiftly.app
+
+      - name: Notarize and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent build/Shiftly.app Shiftly-notarize.zip
+          xcrun notarytool submit Shiftly-notarize.zip --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+          xcrun stapler staple build/Shiftly.app
+
+      - name: Package
+        run: ditto -c -k --keepParent build/Shiftly.app Shiftly.zip
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Shiftly.zip \
+            --title "Shiftly $GITHUB_REF_NAME" --generate-notes

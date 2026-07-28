@@ -4,19 +4,19 @@
 
 # Shiftly
 
-Keyboard window snapping I built for macOS that bypasses Secure Input problems swish has gets.
+Keyboard window snapping I built for macOS that bypasses the Secure Input problems swish has.
 
-Same workflow but keyboard driven here - you hold down a modifier, tap arrow keys to move a window's placement (shown as a colored rectangle), release to move the window there. You have different modifiers for halves, quarters, thirds, sixths, and multi-display moves.
+Same workflow but keyboard driven here. You hold down a modifier key, tap arrow keys to move a window's placement (shown as a colored rectangle), release to move the window there. You have different modifiers for halves, quarters, thirds, sixths, and multi-display moves.
 
 ## Why
 
-Window managers like Swish and Rectangle read the keyboard through a CGEventTap. macOS Secure Input, which a lot of apps grab via a password field, blinds event taps system-wide, and it seems like recently Electron apps have a habit of grabbing it and it breaks until we essentially reboot.
+Window managers like Swish and Rectangle read the keyboard through a CGEventTap. MacOS Secure Input, which a lot of apps grab via a password field, blinds event taps system-wide. This has recently become an issue as recently Electron apps have a habit of grabbing it and it breaks until we reboot.
 
 Shiftly avoids the event tap entirely (but not w/o some drawbacks). 
 
 Hotkeys come in through Carbon's `RegisterEventHotKey`, which WindowServer dispatches even while Secure Input is held (same mechanism that keeps Spotlight's Cmd+Space alive in a password field). Release detection polls `CGEventSource.flagsState`, a state query rather than an event stream, and window moves go through the Accessibility API. These all together lets us avoid the Secure Input problems. 
 
-This _does_ mean however that we are grabbing these modifier keys in essentially any context. You can change the modifers in the menu bar settings to avoid conflicts with other application keybindings if you'd like.
+This _does_ mean that we are grabbing these modifier keys in essentially any context. You can change the modifers in the menu bar settings to avoid conflicts with other application keybindings if you'd like.
 
 ## Gestures
 
@@ -35,7 +35,7 @@ cd shiftly
 open build/Shiftly.app
 ```
 
-Grant Accessibility when prompted (System Settings, Privacy & Security, Accessibility). Without it Shiftly can see your keys but can't move anything.
+Grant Accessibility when prompted (System Settings, Privacy & Security, Accessibility). Without it the app can see your keys but can't move anything.
 
 The build signs with a `Shiftly Dev Signing` certificate if one exists in your keychain, and falls back to ad-hoc signing otherwise.
 

@@ -8,6 +8,10 @@ Keyboard window snapping I built for macOS that bypasses the Secure Input proble
 
 Same workflow but keyboard driven here. You hold down a modifier key, tap arrow keys to move a window's placement (shown as a colored rectangle), release to move the window there. You have different modifiers for halves, quarters, thirds, sixths, and multi-display moves.
 
+## Demo
+
+https://github.com/user-attachments/assets/bc166245-b65a-4eed-aa4d-b076ffbe9108
+
 ## Why
 
 Window managers like Swish and Rectangle read the keyboard through a CGEventTap. MacOS Secure Input, which a lot of apps grab via a password field, blinds event taps system-wide. This has recently become an issue as recently Electron apps have a habit of grabbing it and it breaks until we reboot.

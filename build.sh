@@ -17,13 +17,23 @@ swiftc -O "$ROOT"/Sources/*.swift \
 
 # Sign with a stable identity so the Accessibility grant survives rebuilds
 # (ad-hoc signing changes the app's identity every build, and TCC keys grants
-# to the identity). SIGN_IDENTITY overrides for CI / Developer ID signing;
-# locally a self-signed "Shiftly Dev Signing" cert is used if present.
-IDENTITY="${SIGN_IDENTITY:-Shiftly Dev Signing}"
-if security find-identity -p codesigning -v | grep -q "$IDENTITY"; then
+# to the identity). SIGN_IDENTITY overrides; otherwise prefer Developer ID
+# (same identity as releases, so dev and release builds share one grant),
+# then a self-signed "Shiftly Dev Signing" cert, then ad-hoc.
+IDENTITIES=$(security find-identity -p codesigning -v)
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+	IDENTITY="$SIGN_IDENTITY"
+elif echo "$IDENTITIES" | grep -q "Developer ID Application"; then
+	IDENTITY="Developer ID Application"
+elif echo "$IDENTITIES" | grep -q "Shiftly Dev Signing"; then
+	IDENTITY="Shiftly Dev Signing"
+else
+	IDENTITY=""
+fi
+if [ -n "$IDENTITY" ]; then
 	codesign --force --options runtime --sign "$IDENTITY" "$APP"
 else
-	echo "warning: signing identity '$IDENTITY' missing, ad-hoc signing (accessibility grant will break on rebuild)" >&2
+	echo "warning: no signing identity found, ad-hoc signing (accessibility grant will break on rebuild)" >&2
 	codesign --force --sign - "$APP"
 fi
 

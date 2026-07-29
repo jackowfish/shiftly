@@ -34,11 +34,12 @@ elif echo "$IDENTITIES" | grep -q "Shiftly Dev Signing"; then
 else
 	IDENTITY=""
 fi
+ENTITLEMENTS="$ROOT/Shiftly.entitlements"
 if [ -n "$IDENTITY" ]; then
-	codesign --force --options runtime --sign "$IDENTITY" "$APP"
+	codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 else
 	echo "warning: no signing identity found, ad-hoc signing (accessibility grant will break on rebuild)" >&2
-	codesign --force --sign - "$APP"
+	codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP"
 fi
 
 echo "built $APP"

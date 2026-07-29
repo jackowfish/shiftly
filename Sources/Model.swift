@@ -15,8 +15,22 @@ enum Layer: CaseIterable {
     var menuTitle: String {
         switch self {
         case .halves: return "Halves & Quarters"
-        case .thirds: return "Thirds & Sixths"
+        case .thirds: return "Thirds"
         case .displays: return "Displays"
+        }
+    }
+
+    /// Arrows this layer answers to. The thirds layer used to sub-halve a slot
+    /// on up and down, which is where sixths came from; it doesn't any more, so
+    /// it has no use for the vertical arrows.
+    ///
+    /// Worth listing rather than ignoring the presses, because a bound hot key
+    /// is taken from every other app on the machine whether this one acts on it
+    /// or not. Not binding them hands ⌘⌥↑ and ⌘⌥↓ back.
+    var directions: [Direction] {
+        switch self {
+        case .thirds: return [.left, .right]
+        case .halves, .displays: return [.left, .right, .up, .down]
         }
     }
 }

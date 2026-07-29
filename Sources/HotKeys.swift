@@ -17,7 +17,7 @@ func makeBindings() -> [Binding] {
         (UInt32(kVK_DownArrow), .down, "down"),
     ]
     return Layer.allCases.flatMap { layer in
-        arrows.map { keyCode, direction, name in
+        arrows.filter { layer.directions.contains($0.1) }.map { keyCode, direction, name in
             Binding(keyCode: keyCode,
                     modifiers: Settings.shared.modifiers(for: layer),
                     layer: layer,

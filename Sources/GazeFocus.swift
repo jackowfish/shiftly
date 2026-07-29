@@ -273,16 +273,29 @@ final class GazeFocus {
         var picked: (pid: pid_t, bounds: CGRect)?
         var reason = "frontmost"
         if let point = gazedPoint() {
-            // Front to back, so the visible window wins where two overlap.
-            // Inset because a dot near a shared edge is as likely to belong to
-            // the neighbour, and a gesture that flips between two windows as
-            // you look along the seam is worse than one that does nothing.
-            picked = candidates.first { window in
-                window.bounds.insetBy(dx: min(gazeWindowInset, window.bounds.width * 0.2),
-                                      dy: min(gazeWindowInset, window.bounds.height * 0.2))
-                    .contains(point)
+            // Whatever is on top at that point, and only that. The list is front
+            // to back, so the first window containing the point is the one you
+            // can actually see there.
+            //
+            // Testing the inset while searching, rather than after, is what this
+            // avoids. That version walked past a front window whose margin the
+            // dot had landed in and focused a window behind it, which is a
+            // window you are provably not looking at, since something else is
+            // drawn over the spot you're looking at.
+            if let top = candidates.first(where: { $0.bounds.contains(point) }) {
+                // Inset because a dot near an edge is as likely to belong to
+                // whatever is on the other side of it, and a gesture that flips
+                // between two windows as you read along a shared border is worse
+                // than one that does nothing. Capped at a fifth of the window so
+                // small ones stay reachable.
+                let margin = top.bounds.insetBy(
+                    dx: min(gazeWindowInset, top.bounds.width * 0.2),
+                    dy: min(gazeWindowInset, top.bounds.height * 0.2))
+                if margin.contains(point) {
+                    picked = top
+                    reason = "by dot"
+                }
             }
-            if picked != nil { reason = "by dot" }
         }
         if picked == nil {
             // Nothing clearly under the estimate. A different display still

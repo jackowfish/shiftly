@@ -6,7 +6,7 @@
 
 Keyboard window snapping I built for macOS that bypasses the Secure Input problems swish has.
 
-Same workflow but keyboard driven here. You hold down a modifier key, tap arrow keys to move a window's placement (shown as a colored rectangle), release to move the window there. You have different modifiers for halves, quarters, thirds, sixths, and multi-display moves.
+Same workflow but keyboard driven here. You hold down a modifier key, tap arrow keys to move a window's placement (shown as a colored rectangle), release to move the window there. You have different modifiers for halves, quarters, thirds, and multi-display moves.
 
 ## Demo
 
@@ -27,7 +27,7 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 | Layer | Default | Arrows |
 |---|---|---|
 | Halves & quarters | Cmd | Left/Right snap to halves, Up maximizes, Down centers. Combine them for quarters - Left then Up and you get the top-left quarter. |
-| Thirds & sixths | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down will grab the upper or lower half of whatever slot you're in. |
+| Thirds | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down aren't bound on this layer, so they stay with whatever app you're in. |
 | Displays | Cmd+Shift | Sends the window to the display in that direction, keeping its relative size and position. |
 
 ## Eye Tracking
@@ -40,6 +40,8 @@ That works mid-gesture too. Keep the modifier down, place a window, glance at th
 
 Nothing steals focus on its own. The camera warms while a Shiftly modifier is down and the estimate updates in the background, but focus only moves when an arrow actually lands and a gesture begins. That's what makes it safe to key off Cmd, which you're also holding for Cmd+C and Cmd+Tab all day. Glancing at another monitor during those does nothing.
 
+Only ever the window on top at that point. Whatever is drawn over the spot you're looking at is by definition the thing you can see there, so a window behind it is one you're provably not looking at, and it isn't a candidate no matter how well the estimate fits it.
+
 It stays inert whenever the answer is the window you're already on, and whenever the estimate doesn't land clearly inside anything. Gaze from a webcam is good to a few degrees, which is a couple of hundred pixels at desk distance, so a point near the seam between two windows carries no real opinion about which side of it you meant. Requiring the point to be properly inside a window trades some presses that do nothing for not flipping between two windows as you read along their shared edge.
 
 ### How well it picks
@@ -50,13 +52,16 @@ Depends on how small the target is, and the honest answer is that it's measured 
 |---|---|---|---|---|---|
 | halves | 3440x1440 | 1720x1440 | 68.0% | 2.6% | 29.4% |
 | thirds | 3440x1440 | 1147x1440 | 61.4% | 5.7% | 32.9% |
-| sixths | 3440x1440 | 1147x720 | 48.4% | 9.8% | 41.8% |
+| quarters | 3440x1440 | 1720x720 | 53.6% | 7.7% | 38.7% |
 | halves | 1692x3008 | 846x3008 | 58.8% | 7.7% | 33.5% |
-| sixths | 1692x3008 | 564x1504 | 38.8% | 15.6% | 45.5% |
+| quarters | 1692x3008 | 846x1504 | 53.2% | 9.3% | 37.5% |
+| thirds | 1692x3008 | 564x3008 | 42.9% | 15.0% | 42.0% |
 
-So halves are comfortable, thirds are usable, and sixths is not there. The "does nothing" column is large by design: those are presses that fall back to normal focus behaviour, which is the failure you don't notice.
+So halves are comfortable and thirds are fine on a wide screen. The "does nothing" column is large by design: those are presses that fall back to normal focus behaviour, which is the failure you don't notice.
 
-Two things worth reading off that table. A slot only has to beat the *other windows actually open*, so two or three windows on a screen is a much easier problem than a full six-way tiling, and that's the case it handles well. And the portrait display is worse than the ultrawide at every size, which is about it sitting off to one side rather than about its shape.
+Sixths is absent from that table because the layout is gone. It scored 9.8% wrong on the ultrawide and 15.6% on the portrait display, and widening the "properly inside" margin couldn't buy that down without turning most presses into no-ops, so the thirds layer no longer sub-halves a slot.
+
+Two things worth reading off the table. A slot only has to beat the *other windows actually open*, so two or three windows on a screen is a much easier problem than a fully tiled one, and that's the case it handles well. And what matters is the size of the slot rather than the layout it came from: a 564px-wide third of the portrait display is the worst row here, and it's worse than a quarter of the ultrawide at more than three times the width.
 
 These numbers are deliberately pessimistic compared to what this section used to claim. Scoring a calibration against itself, even holding each dot out, flatters it: the same session, the same sitting position, the same lighting. Fitting one calibration and testing it against a different one is what actually happens when you calibrate on Monday and use it on Friday, and it costs several points everywhere.
 

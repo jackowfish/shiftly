@@ -26,10 +26,8 @@ final class GestureEngine {
     /// ladder skips the "unsnap to itself" rung.
     private var seeded = false
 
-    // Thirds layer: index into thirdSlots (or the fullscreen endcaps) plus a
-    // top/bottom-half ladder.
+    // Thirds layer: index into thirdSlots, or one of the fullscreen endcaps.
     private var slot: Int?
-    private var sixth = 0
 
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
@@ -100,7 +98,6 @@ final class GestureEngine {
         vert = 0
         seeded = false
         slot = nil
-        sixth = 0
         if layer == .halves { seedHalves() }
     }
 
@@ -246,41 +243,23 @@ final class GestureEngine {
         }
     }
 
+    /// Walks the thirds ladder. Horizontal only: up and down used to halve the
+    /// current slot, which is where sixths came from, and aren't bound here now.
     private func stepThirds(_ direction: Direction, area: CGRect) {
-        switch direction {
-        case .left, .right:
-            let delta = direction == .left ? -1 : 1
-            if let current = slot {
-                var next = current + delta
-                // Endcaps need the edge fully covered; a sixth doesn't qualify.
-                if (next == fullLeft || next == fullRight) && sixth != 0 { next = current }
-                slot = min(fullRight, max(fullLeft, next))
-            } else if let match = matchingSlot(original, in: area) {
-                slot = min(fullRight, max(fullLeft, match + delta))
-            } else {
-                slot = direction == .left ? 0 : thirdSlots.count - 1
-            }
-        case .up:
-            if slot == nil { slot = nearestSlot(original, in: area) }
-            if slot != fullLeft && slot != fullRight { sixth = min(1, sixth + 1) }
-        case .down:
-            if slot == nil { slot = nearestSlot(original, in: area) }
-            if slot != fullLeft && slot != fullRight { sixth = max(-1, sixth - 1) }
+        guard direction == .left || direction == .right else { return }
+        let delta = direction == .left ? -1 : 1
+        if let current = slot {
+            slot = min(fullRight, max(fullLeft, current + delta))
+        } else if let match = matchingSlot(original, in: area) {
+            slot = min(fullRight, max(fullLeft, match + delta))
+        } else {
+            slot = direction == .left ? 0 : thirdSlots.count - 1
         }
 
         let current = slot ?? 0
-        if current == fullLeft || current == fullRight {
-            preview = area
-            return
-        }
-        var rect = thirdSlots[current].rect(in: area)
-        if sixth != 0 {
-            rect = CGRect(x: rect.minX,
-                          y: sixth > 0 ? rect.minY : rect.midY,
-                          width: rect.width,
-                          height: rect.height / 2)
-        }
-        preview = rect
+        preview = current == fullLeft || current == fullRight
+            ? area
+            : thirdSlots[current].rect(in: area)
     }
 
     private func stepDisplays(_ direction: Direction) {

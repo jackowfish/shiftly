@@ -24,6 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         installHotKeys()
         GazeFocus.shared.refresh()
+
+        // The debug windows are sized to the screens they were built for, so a
+        // rearrangement has to rebuild them or the dot lands in the wrong place.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main) { _ in GazeDebugOverlay.shared.refresh() }
     }
 
     /// Squircle shift keycap, template-tinted for the menu bar.
@@ -236,6 +243,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            action: nil, keyEquivalent: "").isEnabled = false
         cameraItem.submenu = cameraMenu
 
+        menu.addItem(.separator())
+        let dotItem = menu.addItem(withTitle: "Show Gaze Dot",
+                                   action: #selector(toggleGazeDebugOverlay),
+                                   keyEquivalent: "")
+        dotItem.target = self
+        dotItem.state = settings.gazeDebugOverlay ? .on : .off
+        menu.addItem(withTitle: "Draws where it thinks you're looking, and outlines",
+                     action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "the display a gesture would act on right now.",
+                     action: nil, keyEquivalent: "").isEnabled = false
+
         return menu
     }
 
@@ -263,6 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Gaze
+
+    @objc private func toggleGazeDebugOverlay() {
+        Settings.shared.gazeDebugOverlay.toggle()
+        GazeDebugOverlay.shared.refresh()
+        refreshMenu()
+    }
 
     @objc private func toggleGaze() {
         if Settings.shared.gazeEnabled {

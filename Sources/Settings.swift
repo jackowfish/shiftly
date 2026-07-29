@@ -63,6 +63,11 @@ final class Settings {
         set { defaults.set(newValue, forKey: "gazeCameraAlwaysOn") }
     }
 
+    var gazeDebugOverlay: Bool {
+        get { defaults.bool(forKey: "gazeDebugOverlay") }
+        set { defaults.set(newValue, forKey: "gazeDebugOverlay") }
+    }
+
     /// Nil until calibrated. There's no fallback: without labelled readings
     /// there's nothing to compare against, and guessing was what made the old
     /// version need a Flip Horizontal control.

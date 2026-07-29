@@ -30,10 +30,20 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     /// Called on the main queue for every frame that found a face.
     var onSample: ((GazeSample) -> Void)?
 
-    /// Raw, unsmoothed samples, for the calibrator to average itself.
-    var onRawSample: ((GazeSample) -> Void)?
-
     private(set) var isRunning = false
+
+    /// Recent frames, newest last. Kept here rather than derived from the
+    /// callback so whoever is listening can't change what a decision draws on.
+    private var history: [(at: TimeInterval, sample: GazeSample)] = []
+
+    /// Frames from the last `window` seconds, newest last.
+    func recent(within window: TimeInterval) -> [GazeSample] {
+        let cutoff = ProcessInfo.processInfo.systemUptime - window
+        return history.filter { $0.at >= cutoff }.map(\.sample)
+    }
+
+    /// When the camera last saw a face at all, whatever it made of it.
+    var lastFaceAt: TimeInterval { history.last?.at ?? 0 }
 
     private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
@@ -41,7 +51,6 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     private let request = VNDetectFaceLandmarksRequest()
     private var configured = false
     private var mirrored = false
-    private var smoothed: GazeSample?
     private var lingerTimer: Timer?
 
     private override init() {
@@ -106,7 +115,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         lingerTimer = nil
         guard isRunning else { return }
         isRunning = false
-        smoothed = nil
+        history = []
         queue.async { self.session.stopRunning() }
         log("gaze: camera stopped")
     }
@@ -114,7 +123,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     private func beginSession() {
         guard configure() else { return }
         isRunning = true
-        smoothed = nil
+        history = []
         queue.async { self.session.startRunning() }
         log("gaze: camera started")
     }
@@ -184,25 +193,14 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         guard let face = request.results?.first, let sample = derive(from: face) else { return }
 
         DispatchQueue.main.async {
-            self.onRawSample?(sample)
-            let blended = self.blend(sample)
-            self.onSample?(blended)
+            let now = ProcessInfo.processInfo.systemUptime
+            self.history.append((at: now, sample: sample))
+            let cutoff = now - gazeHistoryWindow
+            if let keep = self.history.firstIndex(where: { $0.at >= cutoff }), keep > 0 {
+                self.history.removeFirst(keep)
+            }
+            self.onSample?(sample)
         }
-    }
-
-    private func blend(_ sample: GazeSample) -> GazeSample {
-        guard let previous = smoothed else {
-            smoothed = sample
-            return sample
-        }
-        let alpha = gazeSmoothing
-        let next = GazeSample(
-            headX: previous.headX + alpha * (sample.headX - previous.headX),
-            headY: previous.headY + alpha * (sample.headY - previous.headY),
-            eyeX: previous.eyeX + alpha * (sample.eyeX - previous.eyeX),
-            eyeY: previous.eyeY + alpha * (sample.eyeY - previous.eyeY))
-        smoothed = next
-        return next
     }
 
     /// Landmark points are normalized to the face's bounding box, so every

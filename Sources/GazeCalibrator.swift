@@ -56,7 +56,7 @@ final class GazeCalibrator {
         buildWindows()
         installCancelMonitor()
 
-        GazeTracker.shared.onRawSample = { [weak self] sample in
+        GazeTracker.shared.onSample = { [weak self] sample in
             guard let self, self.collecting else { return }
             self.collected.append(sample)
         }
@@ -99,12 +99,12 @@ final class GazeCalibrator {
             self.collecting = true
             self.stepTimer = scheduleTimer(after: gazeCalibrationCollect) { [weak self] in
                 guard let self, self.running else { return }
-                self.record(display: target.display)
+                self.record(display: target.display, point: target.point)
             }
         }
     }
 
-    private func record(display: CGDirectDisplayID) {
+    private func record(display: CGDirectDisplayID, point: CGPoint) {
         collecting = false
         if collected.isEmpty {
             log("gaze: no face seen while looking at display \(display)")
@@ -115,7 +115,7 @@ final class GazeCalibrator {
                 headY: collected.reduce(0) { $0 + $1.headY } / count,
                 eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
                 eyeY: collected.reduce(0) { $0 + $1.eyeY } / count)
-            references.append(GazeReference(display: display, sample: mean))
+            references.append(GazeReference(display: display, sample: mean, point: point))
             debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f",
                             display, collected.count, mean.headX, mean.headY, mean.eyeX, mean.eyeY))
         }
@@ -132,7 +132,7 @@ final class GazeCalibrator {
         collecting = false
         running = false
 
-        GazeTracker.shared.onRawSample = nil
+        GazeTracker.shared.onSample = nil
         GazeTracker.shared.stopSoon()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil

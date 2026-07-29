@@ -48,7 +48,21 @@ Calibration records what each display measures like, and a reading is classified
 
 How much each of the four measurements counts is learned from the calibration too, by how far the displays sit apart on it against how much it drifts while you look at just one of them. An axis that moves more within a display than between displays is reading your posture, not your gaze, and ends up weighted near zero. On a side-by-side desk that's most of the weight on head yaw; stack the displays instead and it lands on pitch on its own. Fixed weights can't be right for both, and the ones that shipped first were wrong enough that a glance at the second display was ambiguous on nearly half its frames.
 
-A display has to win by a clear margin and hold it for a few frames. The evidence leaks away rather than resetting, so one jittery frame partway through a glance costs a frame instead of starting the count over.
+A display has to win by a clear margin, or focus stays where it is.
+
+### How fast
+
+The answer is worked out when you press the key, from the newest few camera frames, not read off an estimate that's been running in the background. So the delay is one camera frame plus however long the app you're switching to takes to answer a window query, and there's no settling time to wait out.
+
+That's a correction. The first version smoothed every frame into a moving average and then made the winner hold a lead for several frames before it counted, stacking one lag on the other and turning a deliberate glance into a multi-second wait. None of that damping was buying anything, because nothing acts on the estimate continuously: the only instant it matters is the press. It also gave the thing a memory, which is what made it feel stuck on the last display it picked. Deciding fresh each time removes the state that could get stuck at all.
+
+The last few frames are combined with a median rather than an average, which follows a real move as soon as most of the window is past it while still discarding a single bad landmark fit.
+
+### When it's wrong
+
+Click the display you want. A click outranks gaze for a couple of seconds afterwards, so if a reading disagrees with you, saying so out loud wins.
+
+**Show Gaze Dot** under Eye Tracking outlines the display a gesture would act on right now and draws roughly where on it you're looking, with the distances and the margin ratio underneath. The outline is the part that's actually decided; the dot interpolates between calibration points and is only good enough to show which way things lean. A dot on the wrong screen is the bug worth reporting. Calibrations recorded before this existed still work, they just can't place the dot until you recalibrate.
 
 ### Calibration
 

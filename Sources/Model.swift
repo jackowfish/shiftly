@@ -67,19 +67,38 @@ let animationChoices: [(title: String, duration: Double)] = [
 /// can't be handed an enormous weight.
 let gazeAxisFloor = 0.02
 
-/// Frames are averaged into an exponential moving average before use. Raw
-/// landmarks jitter enough to flip the estimate across a display edge.
-let gazeSmoothing = 0.25
-
 /// The nearest display has to be at least this much closer than the runner-up
-/// to count, and then has to hold that lead for this many frames.
-///
-/// The counter leaks rather than resetting: an ambiguous frame in the middle of
-/// a glance takes one frame back off, instead of throwing away the evidence and
-/// starting over. Hard resets made a genuine look across the desk take seconds,
-/// because a single jittery frame anywhere in the run was enough to restart it.
+/// to count. Anything closer than that leaves focus where it is.
 let gazeMargin = 0.85
-let gazeDisplayHold = 5
+
+/// The decision is made at the instant a key is pressed, from the newest frames
+/// only, rather than from a running estimate that has to settle first.
+///
+/// This is the whole latency budget. An earlier version smoothed every frame
+/// into a moving average and then required the winner to hold a lead for
+/// several frames before it counted, which stacked the smoothing lag on top of
+/// the hold and made a deliberate glance take seconds to register. Nothing acts
+/// on the estimate continuously, so none of that damping bought anything: the
+/// only moment the answer matters is the moment of the press.
+///
+/// A median of the last few frames instead of a mean, because a median tracks a
+/// step as soon as most of its window is past the step, while still throwing
+/// out a single bad landmark fit.
+let gazeDecisionFrames = 3
+let gazeDecisionWindow: TimeInterval = 0.4
+
+/// Frames kept for the press-time decision to draw from.
+let gazeHistoryWindow: TimeInterval = 1.0
+
+/// Clicking a display says plainly which screen you mean, so it outranks gaze
+/// for a moment afterwards. The escape hatch for a reading that disagrees with
+/// you: click the screen you want and it does what you said.
+let gazeClickOverride: TimeInterval = 2.0
+
+/// Cap on how long a window query to another app may block. These are
+/// synchronous calls into processes that might be busy, and they run on the
+/// press, so an app mid-beachball would otherwise stall the gesture.
+let gazeAXTimeout: Float = 0.1
 
 /// Modifier poll, used only to decide when to warm the camera. A flagsState
 /// query, not an event tap, so Secure Input can't blind it.
@@ -98,6 +117,11 @@ let gazeCameraLinger: TimeInterval = 5
 /// gesture that beats the camera's warmup falls back to normal focus instead of
 /// retargeting off a stale reading.
 let gazeStaleAfter: TimeInterval = 1.0
+
+/// Radius of the debug dot, and how long its trail of recent positions lasts.
+let gazeDotRadius: CGFloat = 26
+let gazeDotTrail = 12
+let gazeDotRedraw: TimeInterval = 1.0 / 20
 
 /// How often the menu's gaze readout retitles itself while the menu is open.
 /// Fast enough to follow a glance, slow enough not to look like it's flickering.

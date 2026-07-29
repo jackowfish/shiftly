@@ -26,12 +26,10 @@ final class GazeFocus {
     private var warm = false
     private var heldFrames = 0
 
-    private var display: CGDirectDisplayID?
-    /// Last frame a face was found at all. Separate from the classification,
-    /// which only changes when you actually look somewhere else.
-    private var lastFaceAt: TimeInterval = 0
-    private var pending: CGDirectDisplayID?
-    private var pendingFrames = 0
+    /// Where you last clicked, which outranks gaze for a moment afterwards.
+    private var clickedDisplay: CGDirectDisplayID?
+    private var clickedAt: TimeInterval = 0
+    private var clickMonitor: Any?
 
     private var lastTraceAt: TimeInterval = 0
     private var frameCount = 0
@@ -41,12 +39,12 @@ final class GazeFocus {
     /// Whether the camera has a face in frame right now, which the menu uses to
     /// tell "nobody there" apart from "there, but not clearly on one display".
     var isSeeingFace: Bool {
-        ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter
+        ProcessInfo.processInfo.systemUptime - GazeTracker.shared.lastFaceAt < gazeStaleAfter
     }
 
     /// Display currently being looked at, for the menu to report.
     var currentDisplayName: String? {
-        guard let display, isSeeingFace,
+        guard let display = gazedDisplay(),
               let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
         else { return nil }
         return screen.localizedName
@@ -57,11 +55,11 @@ final class GazeFocus {
     func refresh() {
         pollTimer?.invalidate()
         pollTimer = nil
-        display = nil
-        pending = nil
-        pendingFrames = 0
         heldFrames = 0
-        lastFaceAt = 0
+        clickedDisplay = nil
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
+        GazeDebugOverlay.shared.refresh()
 
         guard Settings.shared.gazeEnabled else {
             warm = false
@@ -73,6 +71,13 @@ final class GazeFocus {
 
         GazeTracker.shared.onSample = { [weak self] sample in
             self?.handle(sample)
+        }
+        // Clicking a display is you saying which screen you mean, out loud, so
+        // it wins over what the camera thinks for a moment. A monitor rather
+        // than an event tap, so it observes without intercepting anything.
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.noteClick()
         }
         if let profile = Settings.shared.gazeProfile {
             debugLog("gaze axis weights: \(profile.weightSummary)")
@@ -93,6 +98,7 @@ final class GazeFocus {
     /// Calibration drives the tracker itself.
     func suspend() {
         GazeTracker.shared.onSample = nil
+        GazeDebugOverlay.shared.hide()
     }
 
     func resume() {
@@ -133,39 +139,32 @@ final class GazeFocus {
 
     private func handle(_ sample: GazeSample) {
         traceSample(sample)
-        // Freshness is about the camera still seeing a face, not about the
-        // answer changing. Tying it to the answer meant that looking steadily at
-        // one display, or hovering somewhere ambiguous, aged the estimate out
-        // and quietly stopped retargeting until something happened to shift.
-        lastFaceAt = ProcessInfo.processInfo.systemUptime
+        GazeDebugOverlay.shared.update()
+    }
 
-        guard let profile = Settings.shared.gazeProfile else { return }
-        let candidate = profile.display(for: sample)
+    private func noteClick() {
+        let point = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else { return }
+        clickedDisplay = displayID(of: screen)
+        clickedAt = ProcessInfo.processInfo.systemUptime
+    }
 
-        // Evidence leaks away instead of resetting. A glance across the desk
-        // passes through the middle, where neither display wins by the required
-        // margin, and wiping the count on those frames meant a real look could
-        // take seconds to register, or never did if the crossing was jittery.
-        if let candidate, candidate != display {
-            if candidate == pending {
-                pendingFrames += 1
-            } else {
-                pending = candidate
-                pendingFrames = 1
-            }
-        } else {
-            pendingFrames -= 1
-            if pendingFrames <= 0 {
-                pending = nil
-                pendingFrames = 0
-            }
+    /// The reading a decision is made from: the median of the newest few
+    /// frames, per axis, or nil when the camera has nothing recent.
+    ///
+    /// Taking the median across axes independently can in principle name a
+    /// point no single frame reported. That's fine here, and is the point: each
+    /// axis is measured separately anyway, and it keeps one bad landmark fit on
+    /// one axis from dragging the others with it.
+    func reading() -> GazeSample? {
+        let samples = GazeTracker.shared.recent(within: gazeDecisionWindow).suffix(gazeDecisionFrames)
+        guard !samples.isEmpty else { return nil }
+        func median(_ axis: (GazeSample) -> Double) -> Double {
+            let sorted = samples.map(axis).sorted()
+            return sorted[sorted.count / 2]
         }
-        guard let winner = pending, pendingFrames >= gazeDisplayHold else { return }
-
-        display = winner
-        pending = nil
-        pendingFrames = 0
-        log("gaze: looking at display \(winner)")
+        return GazeSample(headX: median(\.headX), headY: median(\.headY),
+                          eyeX: median(\.eyeX), eyeY: median(\.eyeY))
     }
 
     /// Once-a-second trace of what the camera sees and how each display scores,
@@ -179,24 +178,36 @@ final class GazeFocus {
         lastTraceAt = now
         frameCount = 0
 
+        // Traced from the same reading a press would decide on, not the raw
+        // frame, so the log shows what a gesture right now would actually do.
+        let decided = reading() ?? sample
         var scores = "no profile"
         if let profile = Settings.shared.gazeProfile {
-            scores = profile.ranking(for: sample)
+            scores = profile.ranking(for: decided)
                 .map { String(format: "%u:%.2f", $0.display, $0.distance) }
                 .joined(separator: " ")
         }
         debugLog(String(format: "gaze %.0ffps head %.3f/%.3f eye %.3f/%.3f | %@ | current %@",
-                        rate, sample.headX, sample.headY, sample.eyeX, sample.eyeY,
-                        scores, display.map(String.init) ?? "none"))
+                        rate, decided.headX, decided.headY, decided.eyeX, decided.eyeY,
+                        scores, gazedDisplay().map(String.init) ?? "none"))
     }
 
     // MARK: Focus
 
     /// Display being looked at right now, or nil when the estimate is off,
     /// stale, or too close to call.
+    ///
+    /// Computed on demand from the newest frames rather than read off a running
+    /// estimate. Nothing to settle, and nothing to get stuck on: the previous
+    /// answer has no say in this one.
     func gazedDisplay() -> CGDirectDisplayID? {
-        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1, isSeeingFace else { return nil }
-        return display
+        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1 else { return nil }
+        if let clickedDisplay,
+           ProcessInfo.processInfo.systemUptime - clickedAt < gazeClickOverride {
+            return clickedDisplay
+        }
+        guard let profile = Settings.shared.gazeProfile, let reading = reading() else { return nil }
+        return profile.display(for: reading)
     }
 
     /// The window a gesture should start on, or nil to use the normal frontmost
@@ -217,12 +228,19 @@ final class GazeFocus {
         let owner = current ?? focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
         if owner == target { return nil }
 
+        let started = ProcessInfo.processInfo.systemUptime
         guard let found = frontmostWindow(on: screen) else {
             log("gaze: no window on the display being looked at")
             return nil
         }
         focus(found.element, pid: found.pid)
-        log("gaze: focused a window on display \(target)")
+        // Timed because this is the one part of the press that isn't ours: it
+        // waits on other apps to answer, and that's where a slow gesture would
+        // now be coming from.
+        let camera = ProcessInfo.processInfo.systemUptime - GazeTracker.shared.lastFaceAt
+        debugLog(String(format: "gaze retarget to display %u: newest frame %.0fms old, window lookup %.0fms",
+                        target, camera * 1000,
+                        (ProcessInfo.processInfo.systemUptime - started) * 1000))
         return found.element
     }
 
@@ -257,6 +275,9 @@ final class GazeFocus {
 
     private func axWindow(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
+        // This runs on the keypress and talks to another process, which might
+        // be busy. Bounded so a stalled app costs a fallback, not the gesture.
+        AXUIElementSetMessagingTimeout(app, gazeAXTimeout)
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
 
         var value: CFTypeRef?

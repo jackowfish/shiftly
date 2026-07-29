@@ -38,10 +38,15 @@ final class GazeFocus {
 
     private init() {}
 
+    /// Whether the camera has a face in frame right now, which the menu uses to
+    /// tell "nobody there" apart from "there, but not clearly on one display".
+    var isSeeingFace: Bool {
+        ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter
+    }
+
     /// Display currently being looked at, for the menu to report.
     var currentDisplayName: String? {
-        guard let display,
-              ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter,
+        guard let display, isSeeingFace,
               let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
         else { return nil }
         return screen.localizedName
@@ -190,8 +195,7 @@ final class GazeFocus {
     /// Display being looked at right now, or nil when the estimate is off,
     /// stale, or too close to call.
     func gazedDisplay() -> CGDirectDisplayID? {
-        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1 else { return nil }
-        guard ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter else { return nil }
+        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1, isSeeingFace else { return nil }
         return display
     }
 

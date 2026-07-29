@@ -5,6 +5,12 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
+    /// The gaze readout is the one menu row whose text changes on its own, so
+    /// it's held onto and retitled while the menu is up. Everything else in the
+    /// menu only changes in response to a click, which rebuilds it anyway.
+    private var gazeStatusItem: NSMenuItem?
+    private var gazeStatusTimer: Timer?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = menuBarIcon()
@@ -155,6 +161,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    private func gazeStatusText() -> String {
+        let settings = Settings.shared
+        if !settings.gazeEnabled { return "Off" }
+        if !settings.isGazeCalibrated { return "Needs calibration before it can do anything" }
+        if settings.gazeCalibrationArrangement != screenArrangementFingerprint() {
+            return "Calibrated for a different display layout, recalibrate"
+        }
+        if let name = GazeFocus.shared.currentDisplayName { return "Looking at: \(name)" }
+        if !GazeTracker.shared.isRunning {
+            return "Ready (camera starts when you hold a modifier)"
+        }
+        // Camera is up, so the two ways of having no answer are worth telling
+        // apart: nobody in frame at all, versus a face sitting somewhere the
+        // calibration can't call between two displays.
+        return GazeFocus.shared.isSeeingFace
+            ? "Looking at: too close to call"
+            : "Looking at: no face visible"
+    }
+
     private func buildGazeMenu() -> NSMenu {
         let settings = Settings.shared
         let menu = NSMenu()
@@ -176,21 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A live readout instead of settings nobody could be expected to
         // interpret. If this says the wrong display while the menu is open,
         // recalibrating is the answer, and that's the only knob left.
-        let status: String
-        if !settings.gazeEnabled {
-            status = "Off"
-        } else if !settings.isGazeCalibrated {
-            status = "Needs calibration before it can do anything"
-        } else if settings.gazeCalibrationArrangement != screenArrangementFingerprint() {
-            status = "Calibrated for a different display layout, recalibrate"
-        } else if let name = GazeFocus.shared.currentDisplayName {
-            status = "Looking at: \(name)"
-        } else if settings.gazeCameraAlwaysOn {
-            status = "Looking at: no face visible"
-        } else {
-            status = "Ready (camera starts when you hold a modifier)"
-        }
-        menu.addItem(withTitle: status, action: nil, keyEquivalent: "").isEnabled = false
+        let statusItem = menu.addItem(withTitle: gazeStatusText(), action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        gazeStatusItem = statusItem
+        menu.delegate = self
 
         let calibrateItem = menu.addItem(withTitle: settings.isGazeCalibrated ? "Recalibrate…" : "Calibrate…",
                                          action: #selector(calibrateGaze),
@@ -381,5 +395,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// Keeps the gaze readout live while the menu is up. Without this the row is
+/// whatever it said when the menu was last rebuilt, which is app launch, so it
+/// permanently reported no face regardless of what the camera was seeing.
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        gazeStatusItem?.title = gazeStatusText()
+        // Menu tracking runs a nested event loop, so this has to be scheduled
+        // in .common mode or it would never fire while the menu is open.
+        gazeStatusTimer?.invalidate()
+        gazeStatusTimer = scheduleTimer(after: gazeStatusRefresh, repeats: true) { [weak self] in
+            guard let self else { return }
+            self.gazeStatusItem?.title = self.gazeStatusText()
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        gazeStatusTimer?.invalidate()
+        gazeStatusTimer = nil
     }
 }

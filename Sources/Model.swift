@@ -99,6 +99,10 @@ let gazeCameraLinger: TimeInterval = 5
 /// retargeting off a stale reading.
 let gazeStaleAfter: TimeInterval = 1.0
 
+/// How often the menu's gaze readout retitles itself while the menu is open.
+/// Fast enough to follow a glance, slow enough not to look like it's flickering.
+let gazeStatusRefresh: TimeInterval = 0.2
+
 /// Calibration targets per display, as fractions of its frame.
 let gazeCalibrationTargets: [CGPoint] = [
     CGPoint(x: 0.12, y: 0.14),

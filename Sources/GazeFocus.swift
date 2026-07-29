@@ -69,6 +69,9 @@ final class GazeFocus {
         GazeTracker.shared.onSample = { [weak self] sample in
             self?.handle(sample)
         }
+        if let profile = Settings.shared.gazeProfile {
+            debugLog("gaze axis weights: \(profile.weightSummary)")
+        }
 
         if Settings.shared.gazeCameraAlwaysOn {
             warm = true
@@ -132,29 +135,32 @@ final class GazeFocus {
         lastFaceAt = ProcessInfo.processInfo.systemUptime
 
         guard let profile = Settings.shared.gazeProfile else { return }
-        guard let candidate = profile.display(for: sample) else {
-            pending = nil
-            pendingFrames = 0
-            return
-        }
-        guard candidate != display else {
-            pending = nil
-            pendingFrames = 0
-            return
-        }
+        let candidate = profile.display(for: sample)
 
-        if candidate == pending {
-            pendingFrames += 1
+        // Evidence leaks away instead of resetting. A glance across the desk
+        // passes through the middle, where neither display wins by the required
+        // margin, and wiping the count on those frames meant a real look could
+        // take seconds to register, or never did if the crossing was jittery.
+        if let candidate, candidate != display {
+            if candidate == pending {
+                pendingFrames += 1
+            } else {
+                pending = candidate
+                pendingFrames = 1
+            }
         } else {
-            pending = candidate
-            pendingFrames = 1
+            pendingFrames -= 1
+            if pendingFrames <= 0 {
+                pending = nil
+                pendingFrames = 0
+            }
         }
-        guard pendingFrames >= gazeDisplayHold else { return }
+        guard let winner = pending, pendingFrames >= gazeDisplayHold else { return }
 
-        display = candidate
+        display = winner
         pending = nil
         pendingFrames = 0
-        log("gaze: looking at display \(candidate)")
+        log("gaze: looking at display \(winner)")
     }
 
     /// Once-a-second trace of what the camera sees and how each display scores,
@@ -181,22 +187,31 @@ final class GazeFocus {
 
     // MARK: Focus
 
+    /// Display being looked at right now, or nil when the estimate is off,
+    /// stale, or too close to call.
+    func gazedDisplay() -> CGDirectDisplayID? {
+        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1 else { return nil }
+        guard ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter else { return nil }
+        return display
+    }
+
     /// The window a gesture should start on, or nil to use the normal frontmost
     /// window. Focuses it as a side effect, which is the point.
-    func gazedWindow() -> AXUIElement? {
-        guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1 else { return nil }
-        guard let target = display,
-              ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter
-        else { return nil }
+    ///
+    /// `alreadyOn` is the display the gesture is currently working on. Passing
+    /// it lets a gesture already in flight ask the same question mid-run: when
+    /// you hold the modifier down and glance at another screen, the gesture
+    /// hands off to a window there instead of being stuck on the one it opened
+    /// with.
+    func gazedWindow(alreadyOn current: CGDirectDisplayID? = nil) -> AXUIElement? {
+        guard let target = gazedDisplay() else { return nil }
         guard let screen = NSScreen.screens.first(where: { displayID(of: $0) == target }) else { return nil }
 
-        // Already looking at the display that owns the focused window: leave it
+        // Already looking at the display that owns the window in play: leave it
         // alone. Otherwise every gesture would raise whatever is frontmost there,
         // which is not what "focus the screen I'm looking at" means.
-        if let current = focusedWindow(), let rect = frame(of: current),
-           displayID(of: screenContaining(rect)) == target {
-            return nil
-        }
+        let owner = current ?? focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
+        if owner == target { return nil }
 
         guard let found = frontmostWindow(on: screen) else {
             log("gaze: no window on the display being looked at")

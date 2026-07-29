@@ -62,27 +62,24 @@ let animationChoices: [(title: String, duration: Double)] = [
 
 // MARK: - Gaze
 
-/// Weight on the pupil term when comparing readings. The head covers most of
-/// the angle to a side display; the eyes cover the part it didn't travel, which
-/// on a wide desk is the part a single camera can't see the head make.
-let gazeHeadWeight = 0.7
-let gazeEyeWeight = 0.3
-
-/// Plausible range of each axis, used to put them on comparable footing before
-/// they're compared. Head rotation is in inter-ocular widths, pupil offset is a
-/// fraction of the eye opening, and they swing over very different numbers.
-let gazeHeadXSpan = 0.30
-let gazeHeadYSpan = 0.18
-let gazeEyeSpan = 0.70
+/// Floor on an axis's measured within-display spread when weights are learned
+/// from calibration, so an axis that happened to sit still for five readings
+/// can't be handed an enormous weight.
+let gazeAxisFloor = 0.02
 
 /// Frames are averaged into an exponential moving average before use. Raw
 /// landmarks jitter enough to flip the estimate across a display edge.
 let gazeSmoothing = 0.25
 
-/// The nearest display's reading has to be at least this much closer than the
-/// runner-up to count, and then has to win this many frames in a row.
-let gazeMargin = 0.75
-let gazeDisplayHold = 6
+/// The nearest display has to be at least this much closer than the runner-up
+/// to count, and then has to hold that lead for this many frames.
+///
+/// The counter leaks rather than resetting: an ambiguous frame in the middle of
+/// a glance takes one frame back off, instead of throwing away the evidence and
+/// starting over. Hard resets made a genuine look across the desk take seconds,
+/// because a single jittery frame anywhere in the run was enough to restart it.
+let gazeMargin = 0.85
+let gazeDisplayHold = 5
 
 /// Modifier poll, used only to decide when to warm the camera. A flagsState
 /// query, not an event tap, so Secure Input can't blind it.

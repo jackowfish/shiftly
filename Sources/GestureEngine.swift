@@ -34,6 +34,19 @@ final class GestureEngine {
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
 
+        // Hand off mid-gesture when you've looked at another display since the
+        // last press. Holding the modifier down across several windows is the
+        // normal way to use this, so the target can't be picked once when the
+        // gesture opens and then kept for the rest of it. Whatever was pending
+        // on the old window commits on the way out.
+        if active, let screen = previewScreen,
+           let handoff = GazeFocus.shared.gazedWindow(alreadyOn: displayID(of: screen)),
+           let rect = frame(of: handoff) {
+            commit()
+            begin(on: handoff, frame: rect, layer: newLayer)
+            isFirstPress = true
+        }
+
         if !active {
             // With eye tracking on, the first press starts on whatever window
             // sits on the display being looked at, falling back to the normal
@@ -51,15 +64,8 @@ final class GestureEngine {
                 NSSound.beep()
                 return
             }
-            window = focused
-            original = current
-            preview = current
-            previewScreen = screenContaining(current)
-            layer = newLayer
-            resetLayerState()
-            active = true
+            begin(on: focused, frame: current, layer: newLayer)
             isFirstPress = true
-            startPolling()
         } else if newLayer != layer {
             // Carry the pending placement across so layers compose.
             original = preview
@@ -76,6 +82,17 @@ final class GestureEngine {
             setFrame(preview.integral, on: window)
         }
         log("preview: \(label)")
+    }
+
+    private func begin(on target: AXUIElement, frame rect: CGRect, layer newLayer: Layer) {
+        window = target
+        original = rect
+        preview = rect
+        previewScreen = screenContaining(rect)
+        layer = newLayer
+        resetLayerState()
+        active = true
+        startPolling()
     }
 
     private func resetLayerState() {

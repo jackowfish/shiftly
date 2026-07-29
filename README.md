@@ -32,7 +32,9 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 
 ## Eye Tracking
 
-Off by default, under Eye Tracking in the menu bar item. It doesn't add a gesture. It changes which window the gestures above start on: hold your usual modifier, look at another display, and the first arrow press grabs the frontmost window over there instead of whatever was frontmost before.
+Off by default, under Eye Tracking in the menu bar item. It doesn't add a gesture. It changes which window the gestures above act on: hold your usual modifier, look at another display, and the next arrow press grabs the frontmost window over there instead of whatever was frontmost before.
+
+That works mid-gesture too. Keep the modifier down, place a window, glance at the next display, and the following arrow hands off to a window there, committing whatever was pending on the one you left.
 
 Nothing steals focus on its own. The camera warms while a Shiftly modifier is down and the estimate updates in the background, but focus only moves when an arrow actually lands and a gesture begins. That's what makes it safe to key off Cmd, which you're also holding for Cmd+C and Cmd+Tab all day. Glancing at another monitor during those does nothing.
 
@@ -42,11 +44,11 @@ On a single display it's inert, and it stays inert whenever you're already looki
 
 Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring. The pupils matter too, because a camera on one display can't see your head turn far enough to face a monitor off to the side; the eyes make up the angle the head didn't travel.
 
-Calibration records what each display measures like, and a reading is classified by finding the nearest labelled one. There's deliberately nothing to configure. An earlier version mapped face geometry onto desktop coordinates, which meant telling it which way round the camera was mounted, and that's where a "Flip Horizontal" control came from that nobody could be expected to interpret. Comparing against labelled readings makes mirroring, mounting, and how far you personally turn your head all fall out of the calibration for free.
+Calibration records what each display measures like, and a reading is classified by whichever display's readings it sits closest to. There's deliberately nothing to configure. An earlier version mapped face geometry onto desktop coordinates, which meant telling it which way round the camera was mounted, and that's where a "Flip Horizontal" control came from that nobody could be expected to interpret. Comparing against labelled readings makes mirroring, mounting, and how far you personally turn your head all fall out of the calibration for free.
 
-It compares against individual readings rather than a per-display average, because an ultrawide is wide enough that its left edge and right edge measure quite differently, and the average of the two can sit closer to the display next door.
+How much each of the four measurements counts is learned from the calibration too, by how far the displays sit apart on it against how much it drifts while you look at just one of them. An axis that moves more within a display than between displays is reading your posture, not your gaze, and ends up weighted near zero. On a side-by-side desk that's most of the weight on head yaw; stack the displays instead and it lands on pitch on its own. Fixed weights can't be right for both, and the ones that shipped first were wrong enough that a glance at the second display was ambiguous on nearly half its frames.
 
-A display has to win by a clear margin and hold it for six frames. Anything ambiguous leaves focus alone.
+A display has to win by a clear margin and hold it for a few frames. The evidence leaks away rather than resetting, so one jittery frame partway through a glance costs a frame instead of starting the count over.
 
 ### Calibration
 

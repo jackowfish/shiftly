@@ -330,7 +330,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func offerCalibration() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        let seconds = Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count)
+        let seconds = Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count
+            * GazeCalibrationStyle.allCases.count)
             * (gazeCalibrationSettle + gazeCalibrationCollect))
         alert.messageText = "Calibrate eye tracking?"
         alert.informativeText = """
@@ -338,6 +339,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             the camera, so it does nothing until you calibrate. A dot walks \
             around each screen and you look at it, which takes about \
             \(seconds) seconds.
+
+            It goes round twice: once holding your head still and moving only \
+            your eyes, once looking naturally. Both are needed, or it only \
+            recognises whichever way you calibrated.
             """
         alert.addButton(withTitle: "Calibrate")
         alert.addButton(withTitle: "Later")

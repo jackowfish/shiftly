@@ -12,9 +12,13 @@ final class GazeCalibrator {
 
     private var windows: [NSWindow] = []
     private var views: [CGDirectDisplayID: CalibrationView] = [:]
-    private var targets: [(point: CGPoint, display: CGDirectDisplayID)] = []
+    private var targets: [(point: CGPoint, display: CGDirectDisplayID, style: GazeCalibrationStyle)] = []
     private var references: [GazeReference] = []
     private var collected: [GazeSample] = []
+    /// Per-axis jitter measured inside each burst, which is the measurement
+    /// noise the classifier scales distances by.
+    private var noise: [GazeSample] = []
+    private var capture: GazeCapture.Session?
     private var index = 0
     private var collecting = false
     private var stepTimer: Timer?
@@ -42,14 +46,20 @@ final class GazeCalibrator {
         GazeFocus.shared.suspend()
         references = []
         collected = []
+        noise = []
+        capture = GazeCapture.Session()
         index = 0
 
-        targets = NSScreen.screens.flatMap { screen -> [(CGPoint, CGDirectDisplayID)] in
-            let area = usableFrame(of: screen)
-            let identifier = displayID(of: screen)
-            return gazeCalibrationTargets.map { fraction in
-                (CGPoint(x: area.minX + area.width * fraction.x,
-                         y: area.minY + area.height * fraction.y), identifier)
+        // Style outermost, so each pass is one continuous instruction rather
+        // than asking you to switch how you're sitting at every dot.
+        targets = GazeCalibrationStyle.allCases.flatMap { style in
+            NSScreen.screens.flatMap { screen -> [(CGPoint, CGDirectDisplayID, GazeCalibrationStyle)] in
+                let area = usableFrame(of: screen)
+                let identifier = displayID(of: screen)
+                return gazeCalibrationTargets.map { fraction in
+                    (CGPoint(x: area.minX + area.width * fraction.x,
+                             y: area.minY + area.height * fraction.y), identifier, style)
+                }
             }
         }
 
@@ -57,8 +67,11 @@ final class GazeCalibrator {
         installCancelMonitor()
 
         GazeTracker.shared.onSample = { [weak self] sample in
-            guard let self, self.collecting else { return }
+            guard let self, self.collecting, self.index < self.targets.count else { return }
             self.collected.append(sample)
+            let target = self.targets[self.index]
+            self.capture?.add(sample, display: target.display, point: target.point,
+                              style: target.style, at: ProcessInfo.processInfo.systemUptime)
         }
         GazeTracker.shared.start()
 
@@ -89,8 +102,8 @@ final class GazeCalibrator {
         let target = targets[index]
         collecting = false
         collected = []
-        show(target: target.point, progress: Double(index) / Double(targets.count))
-        debugLog("calibration target \(index + 1)/\(targets.count) on display \(target.display) at \(target.point)")
+        show(target: target.point, style: target.style, progress: Double(index) / Double(targets.count))
+        debugLog("calibration target \(index + 1)/\(targets.count) [\(target.style.name)] on display \(target.display) at \(target.point)")
 
         // Settle first, then average a burst. Averaging across the settle would
         // bake in the travel from the previous dot.
@@ -116,11 +129,39 @@ final class GazeCalibrator {
                 eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
                 eyeY: collected.reduce(0) { $0 + $1.eyeY } / count)
             references.append(GazeReference(display: display, sample: mean, point: point))
+            // The spread inside a single burst, while you held still on one dot,
+            // is how precisely each axis can be measured at all. That's the
+            // right scale for comparing readings; the spread *across* a
+            // display's dots is where you looked, which is signal, not noise.
+            noise.append(GazeSample(headX: spread(collected.map(\.headX)),
+                                    headY: spread(collected.map(\.headY)),
+                                    eyeX: spread(collected.map(\.eyeX)),
+                                    eyeY: spread(collected.map(\.eyeY))))
             debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f",
                             display, collected.count, mean.headX, mean.headY, mean.eyeX, mean.eyeY))
         }
         index += 1
         advance()
+    }
+
+    /// Median jitter per axis across every burst. Median rather than mean so a
+    /// single burst where a blink wrecked the landmarks doesn't set the scale
+    /// for the whole profile.
+    private func pooledNoise() -> GazeSample? {
+        guard !noise.isEmpty else { return nil }
+        func middle(_ axis: (GazeSample) -> Double) -> Double {
+            let sorted = noise.map(axis).sorted()
+            return sorted[sorted.count / 2]
+        }
+        return GazeSample(headX: middle(\.headX), headY: middle(\.headY),
+                          eyeX: middle(\.eyeX), eyeY: middle(\.eyeY))
+    }
+
+    private func spread(_ values: [Double]) -> Double {
+        guard values.count > 1 else { return 0 }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(values.count - 1)
+        return variance.squareRoot()
     }
 
     private func finish(save: Bool) {
@@ -145,7 +186,11 @@ final class GazeCalibrator {
         // could never win and their windows would be unreachable.
         let covered = Set(references.map(\.display))
         let expected = Set(NSScreen.screens.map { displayID(of: $0) })
+        capture?.close()
+        capture = nil
+
         if save, !references.isEmpty, covered == expected {
+            Settings.shared.gazeNoise = pooledNoise()
             Settings.shared.gazeProfile = GazeProfile(references: references)
             Settings.shared.gazeCalibrationArrangement = screenArrangementFingerprint()
             saved = true
@@ -188,7 +233,7 @@ final class GazeCalibrator {
 
     /// The dot lives in AX coordinates; each view draws in its own screen's
     /// flipped, screen-local space.
-    private func show(target: CGPoint, progress: Double) {
+    private func show(target: CGPoint, style: GazeCalibrationStyle, progress: Double) {
         let screen = nearestScreen(to: target)
         let identifier = displayID(of: screen)
         let screenRect = flipRect(screen.frame)
@@ -196,6 +241,7 @@ final class GazeCalibrator {
                             y: target.y - screenRect.minY)
 
         for (key, view) in views {
+            view.style = style
             view.progress = progress
             view.target = key == identifier ? local : nil
             view.needsDisplay = true
@@ -216,6 +262,7 @@ final class GazeCalibrator {
 /// the AX space everything else in Shiftly works in.
 final class CalibrationView: NSView {
     var target: CGPoint?
+    var style: GazeCalibrationStyle = .still
     var progress: Double = 0
     var onClick: (() -> Void)?
 
@@ -242,9 +289,7 @@ final class CalibrationView: NSView {
             ring.stroke()
         }
 
-        let hint = target == nil
-            ? "Calibrating on another display…"
-            : "Look at the dot. Esc or click to cancel."
+        let hint = target == nil ? "Calibrating on another display…" : style.hint
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 17, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.85),

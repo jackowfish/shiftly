@@ -23,26 +23,34 @@ struct GazeReference {
 /// Mirroring, mounting, and how far you personally turn your head all fall out
 /// of the labels for free, with nothing left for anyone to configure.
 ///
-/// The axes are weighted by how well they actually separate the displays,
-/// measured from the calibration readings themselves. On a side-by-side desk
-/// that lands almost all the weight on head yaw and near none on the pupil
-/// terms, which vary just as much within one display as between two and were
-/// otherwise adding pure noise. Hand-picked weights couldn't know that; they
-/// have to be wrong for either a stacked arrangement or a side-by-side one.
+/// The axes are weighted by how well each one separates the displays against
+/// how precisely it can be measured, both taken from the calibration readings.
+/// Hand-picked weights can't know which axis carries the signal on a given
+/// desk: side by side it's yaw, stacked it's pitch, and held still it's the
+/// pupils.
 struct GazeProfile {
     let references: [GazeReference]
 
-    /// Mean reading per display, and how much weight each axis has earned.
-    private let centers: [CGDirectDisplayID: GazeSample]
+    /// How much weight each axis earned from the calibration.
     private let weights: GazeSample
 
     var displays: Set<CGDirectDisplayID> { Set(references.map(\.display)) }
 
-    /// Every display and how far its centre is from this reading, nearest first.
+    /// Every display and how far its nearest reading is, nearest first.
+    ///
+    /// Nearest reading rather than nearest average. Once the axes are scaled by
+    /// measurement noise instead of by how much they vary across a display, the
+    /// spread within a display is real information about where on it you were
+    /// looking, and collapsing five readings to their mean throws it away. On an
+    /// ultrawide that mean sits in the middle of a screen wide enough that its
+    /// two edges measure nothing alike.
     func ranking(for sample: GazeSample) -> [(display: CGDirectDisplayID, distance: Double)] {
-        centers
-            .map { (display: $0.key, distance: distance(sample, $0.value)) }
-            .sorted { $0.distance < $1.distance }
+        var closest: [CGDirectDisplayID: Double] = [:]
+        for reference in references {
+            let measured = distance(sample, reference.sample)
+            closest[reference.display] = min(closest[reference.display] ?? .greatestFiniteMagnitude, measured)
+        }
+        return closest.sorted { $0.value < $1.value }.map { (display: $0.key, distance: $0.value) }
     }
 
     /// The display being looked at, or nil when it's too close to call.
@@ -98,11 +106,22 @@ struct GazeProfile {
 
     // MARK: Fitting
 
-    /// Weight per axis: how far the displays sit apart on it, over how much it
-    /// wanders while you look at one of them. An axis that moves more within a
-    /// display than between displays is measuring your posture, not your gaze,
-    /// and comes out near zero.
-    private static func fit(_ groups: [CGDirectDisplayID: [GazeSample]]) -> GazeSample {
+    /// Weight per axis: how far the displays sit apart on it, over how precisely
+    /// it can be measured at all.
+    ///
+    /// The denominator matters more than it looks. It used to be how much the
+    /// axis varied across one display's readings, which quietly punished the
+    /// pupil terms: calibration dots span a whole screen, so pupil position
+    /// varies over its full range at every display, and the axis carrying the
+    /// most usable information scored as the noisiest. The result was a profile
+    /// that put essentially all its weight on head yaw and then needed a real
+    /// head turn to register anything.
+    ///
+    /// Using per-frame jitter instead — how much an axis wobbles while you hold
+    /// a single dot — separates "moves a lot because it's tracking something"
+    /// from "moves a lot because it can't be pinned down".
+    private static func fit(_ groups: [CGDirectDisplayID: [GazeSample]],
+                            noise: GazeSample?) -> GazeSample {
         func weight(_ axis: (GazeSample) -> Double) -> Double {
             let perDisplay = groups.values.map { samples in
                 samples.map(axis)
@@ -110,10 +129,10 @@ struct GazeProfile {
             let means = perDisplay.map { mean($0) }
             guard means.count > 1 else { return 1 }
             let between = spread(means)
-            // Pooled, so one twitchy display doesn't drag an otherwise clean
-            // axis down on its own.
-            let within = mean(perDisplay.map { spread($0) })
-            return between / max(within, gazeAxisFloor)
+            // Profiles saved before jitter was measured fall back to the old
+            // within-display spread, so an existing calibration still loads.
+            let scale = noise.map(axis) ?? mean(perDisplay.map { spread($0) })
+            return between / max(scale, gazeAxisFloor)
         }
 
         var raw = GazeSample(headX: weight(\.headX), headY: weight(\.headY),
@@ -161,24 +180,21 @@ struct GazeProfile {
         }
     }
 
-    init(references: [GazeReference]) {
+    /// Whether the dot has anywhere to go, which the debug overlay reports so a
+    /// blank screen doesn't read as a broken tracker.
+    var hasPoints: Bool { references.contains { $0.point != nil } }
+
+    init(references: [GazeReference], noise: GazeSample? = nil) {
         self.references = references
 
         var groups: [CGDirectDisplayID: [GazeSample]] = [:]
         for reference in references {
             groups[reference.display, default: []].append(reference.sample)
         }
-        centers = groups.mapValues { samples in
-            let count = Double(samples.count)
-            return GazeSample(headX: samples.reduce(0) { $0 + $1.headX } / count,
-                              headY: samples.reduce(0) { $0 + $1.headY } / count,
-                              eyeX: samples.reduce(0) { $0 + $1.eyeX } / count,
-                              eyeY: samples.reduce(0) { $0 + $1.eyeY } / count)
-        }
-        weights = GazeProfile.fit(groups)
+        weights = GazeProfile.fit(groups, noise: noise)
     }
 
-    init?(storage: [[Double]]) {
+    init?(storage: [[Double]], noise: GazeSample? = nil) {
         guard !storage.isEmpty else { return nil }
         var parsed: [GazeReference] = []
         for row in storage {
@@ -189,6 +205,6 @@ struct GazeProfile {
                 sample: GazeSample(headX: row[1], headY: row[2], eyeX: row[3], eyeY: row[4]),
                 point: row.count == 7 ? CGPoint(x: row[5], y: row[6]) : nil))
         }
-        self.init(references: parsed)
+        self.init(references: parsed, noise: noise)
     }
 }

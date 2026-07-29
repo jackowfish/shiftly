@@ -72,8 +72,24 @@ final class Settings {
     /// there's nothing to compare against, and guessing was what made the old
     /// version need a Flip Horizontal control.
     var gazeProfile: GazeProfile? {
-        get { GazeProfile(storage: defaults.array(forKey: "gazeProfile") as? [[Double]] ?? []) }
+        get {
+            GazeProfile(storage: defaults.array(forKey: "gazeProfile") as? [[Double]] ?? [],
+                        noise: gazeNoise)
+        }
         set { defaults.set(newValue?.storage, forKey: "gazeProfile") }
+    }
+
+    /// Per-axis measurement jitter from the last calibration. Nil for profiles
+    /// saved before it was measured, which fall back to the older scaling.
+    var gazeNoise: GazeSample? {
+        get {
+            guard let row = defaults.array(forKey: "gazeNoise") as? [Double], row.count == 4
+            else { return nil }
+            return GazeSample(headX: row[0], headY: row[1], eyeX: row[2], eyeY: row[3])
+        }
+        set {
+            defaults.set(newValue.map { [$0.headX, $0.headY, $0.eyeX, $0.eyeY] }, forKey: "gazeNoise")
+        }
     }
 
     /// Display arrangement the calibration was fitted against. A mismatch
@@ -88,6 +104,7 @@ final class Settings {
 
     func clearGazeCalibration() {
         defaults.removeObject(forKey: "gazeProfile")
+        defaults.removeObject(forKey: "gazeNoise")
         defaults.removeObject(forKey: "gazeCalibrationArrangement")
     }
 }

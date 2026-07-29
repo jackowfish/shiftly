@@ -99,6 +99,11 @@ final class GazeDebugOverlay {
             caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f",
                              scores, ratio, gazeMargin,
                              reading.headX, reading.headY, reading.eyeX, reading.eyeY)
+            // A blank screen otherwise reads as a broken tracker rather than an
+            // old calibration that predates the dot having anywhere to go.
+            if !profile.hasPoints {
+                caption += "   (recalibrate to place the dot)"
+            }
         } else if reading != nil {
             caption = "not calibrated"
         }

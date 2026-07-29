@@ -127,13 +127,42 @@ let gazeDotRedraw: TimeInterval = 1.0 / 20
 /// Fast enough to follow a glance, slow enough not to look like it's flickering.
 let gazeStatusRefresh: TimeInterval = 0.2
 
-/// Calibration targets per display, as fractions of its frame.
+/// Calibration runs twice, once holding your head still and once moving
+/// naturally, and keeps both sets of readings.
+///
+/// One pass isn't enough, and which single pass you pick doesn't rescue it.
+/// Calibrating head-free teaches it that yaw is the signal, so a glance without
+/// a head turn registers nothing, which is what the first version did. Doing
+/// only the still pass inverts the problem: replaying a head-free session
+/// against a still-only profile lands roughly a third of frames on the wrong
+/// display, because the head absorbs angle the eyes were calibrated to cover.
+/// Keeping both, and matching against individual readings rather than a
+/// per-display average, handles either style. See tools/gaze_eval.py.
+enum GazeCalibrationStyle: CaseIterable {
+    case still, free
+
+    var hint: String {
+        switch self {
+        case .still: return "Keep your head still. Move only your eyes to the dot."
+        case .free: return "Now look at the dot naturally, turning your head."
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .still: return "still"
+        case .free: return "free"
+        }
+    }
+}
+
+/// Targets per display per pass, as fractions of its frame. Four rather than
+/// five only to keep two passes to about half a minute.
 let gazeCalibrationTargets: [CGPoint] = [
-    CGPoint(x: 0.12, y: 0.14),
-    CGPoint(x: 0.88, y: 0.14),
-    CGPoint(x: 0.50, y: 0.50),
-    CGPoint(x: 0.12, y: 0.86),
-    CGPoint(x: 0.88, y: 0.86),
+    CGPoint(x: 0.12, y: 0.16),
+    CGPoint(x: 0.88, y: 0.16),
+    CGPoint(x: 0.12, y: 0.84),
+    CGPoint(x: 0.88, y: 0.84),
 ]
 
 let gazeCalibrationSettle: TimeInterval = 0.9

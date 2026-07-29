@@ -44,9 +44,9 @@ On a single display it's inert, and it stays inert whenever you're already looki
 
 Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring. The pupils matter too, because a camera on one display can't see your head turn far enough to face a monitor off to the side; the eyes make up the angle the head didn't travel.
 
-Calibration records what each display measures like, and a reading is classified by whichever display's readings it sits closest to. There's deliberately nothing to configure. An earlier version mapped face geometry onto desktop coordinates, which meant telling it which way round the camera was mounted, and that's where a "Flip Horizontal" control came from that nobody could be expected to interpret. Comparing against labelled readings makes mirroring, mounting, and how far you personally turn your head all fall out of the calibration for free.
+Calibration records what each display measures like, and a reading is classified by whichever labelled reading it sits closest to. There's deliberately nothing to configure. An earlier version mapped face geometry onto desktop coordinates, which meant telling it which way round the camera was mounted, and that's where a "Flip Horizontal" control came from that nobody could be expected to interpret. Comparing against labelled readings makes mirroring, mounting, and how far you personally turn your head all fall out of the calibration for free.
 
-How much each of the four measurements counts is learned from the calibration too, by how far the displays sit apart on it against how much it drifts while you look at just one of them. An axis that moves more within a display than between displays is reading your posture, not your gaze, and ends up weighted near zero. On a side-by-side desk that's most of the weight on head yaw; stack the displays instead and it lands on pitch on its own. Fixed weights can't be right for both, and the ones that shipped first were wrong enough that a glance at the second display was ambiguous on nearly half its frames.
+How much each of the four measurements counts is learned from the calibration too: how far the displays sit apart on that axis, over how much it wobbles while you hold a single dot. The denominator is the subtle part. It used to be how much the axis varied across one display's dots, which quietly buried the pupil terms, because pupil position sweeps its whole range on every screen and so scored as the noisiest thing on offer. That produced a profile weighted almost entirely on head yaw, which is why the first version needed a real head turn before it noticed anything. Per-frame wobble instead separates "moves a lot because it's tracking something" from "moves a lot because it can't be pinned down".
 
 A display has to win by a clear margin, or focus stays where it is.
 
@@ -67,6 +67,14 @@ Click the display you want. A click outranks gaze for a couple of seconds afterw
 ### Calibration
 
 Required. Without labelled readings there's nothing to compare against, so the feature does nothing until you calibrate. A dot walks around each screen, about a second and a half per stop, and you look at it. Recalibrate after changing your display arrangement; the menu says when the saved calibration was recorded against a different one.
+
+It goes round **twice**: once holding your head still and moving only your eyes, once looking naturally. Both passes are kept and matched against individually. One pass isn't enough and picking the "right" one doesn't save it, because the two styles put the same gaze in different places: the head absorbs angle the eyes would otherwise cover. Replaying a natural-movement session against a hold-still-only profile puts about a third of frames on the wrong display.
+
+### Working on the classifier
+
+Every calibration writes the raw frames it saw, labelled with the display and dot that was on screen, to `~/Library/Logs/Shiftly-gaze/`. `tools/gaze_eval.py` replays those through candidate metrics and scores each one on accuracy, how often it's confident enough to act, how often it's confidently wrong, and how many frames it lags a change of target.
+
+That exists because tuning this by feel needs a person, a rebuild and a fresh opinion per change, which is slow enough that it mostly gets guessed at instead. Every claim above about which metric wins came out of that script, including the two-pass finding, which was caught replaying one style's session against the other's profile before it shipped.
 
 The menu also shows which display it currently thinks you're looking at, which is the quickest way to tell whether it's working.
 

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
@@ -107,6 +108,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         animationItem.submenu = animationMenu
 
         menu.addItem(.separator())
+        let loginItem = menu.addItem(withTitle: "Start at Login",
+                                     action: #selector(toggleLoginItem),
+                                     keyEquivalent: "")
+        loginItem.target = self
+        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        let updateItem = menu.addItem(withTitle: "Check for Updates…",
+                                      action: #selector(checkForUpdates),
+                                      keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(.separator())
         let logItem = menu.addItem(withTitle: "Open Log", action: #selector(openLog), keyEquivalent: "")
         logItem.target = self
         let settingsItem = menu.addItem(withTitle: "Accessibility Settings",
@@ -157,6 +168,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Settings.shared.overlayColorName = name
         Settings.shared.overlayEnabled = true
         refreshMenu()
+    }
+
+    @objc private func toggleLoginItem() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            log("login item toggle failed: \(error.localizedDescription)")
+            NSSound.beep()
+        }
+        refreshMenu()
+    }
+
+    @objc private func checkForUpdates() {
+        Updater.check()
     }
 
     @objc private func openLog() {

@@ -12,7 +12,7 @@ final class Settings {
             Layer.displays.settingsKey: cmdKey | shiftKey,
             "overlayEnabled": true,
             "overlayColor": "accent",
-            "animationDuration": 0.16,
+            "animationDuration": 0.08,
         ])
     }
 

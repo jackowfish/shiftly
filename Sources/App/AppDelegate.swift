@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         animationItem.submenu = animationMenu
 
-        let gazeItem = menu.addItem(withTitle: "Eye Tracking", action: nil, keyEquivalent: "")
+        let gazeItem = menu.addItem(withTitle: "Eye Tracking (Beta)", action: nil, keyEquivalent: "")
         gazeItem.submenu = buildGazeMenu()
 
         menu.addItem(.separator())

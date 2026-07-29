@@ -229,7 +229,12 @@ final class GazeFocus {
     /// with.
     func gazedWindow(alreadyOn current: CGDirectDisplayID? = nil) -> AXUIElement? {
         let owner = current ?? focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
-        guard let target = gazedTarget(alreadyOn: owner) else { return nil }
+        guard let target = gazedTarget(alreadyOn: owner).pick else { return nil }
+        // Already on it, so there's nothing to move focus to. Checked here
+        // rather than inside gazedTarget, which answers where you're looking
+        // and shouldn't have an opinion about what's focused.
+        if let focused = focusedWindow().flatMap(frame(of:)),
+           nearlyEqual(focused, target.bounds) { return nil }
 
         let started = ProcessInfo.processInfo.systemUptime
         // AX is resolved for the winner only. Asking every window on the screen
@@ -249,39 +254,58 @@ final class GazeFocus {
         return element
     }
 
-    /// The window a gesture would act on, without touching focus.
+    /// The window the estimate points at, or why it doesn't point at one.
     ///
-    /// Split out from `gazedWindow` so the debug overlay can draw the answer.
-    /// Anything that shows you what the tracker is about to do has to be able to
-    /// ask without doing it.
+    /// Two ways to land on one. If the calibration can place the dot and the dot
+    /// is inside a window, that window wins, which is what makes this work
+    /// between two windows on one screen. Failing that, changing displays takes
+    /// whatever is frontmost over there, which needs no placement fit.
     ///
-    /// Two ways to land on a window. If the calibration can place the dot and
-    /// the dot is inside a window, that window wins, which is what makes this
-    /// work between two windows on one screen. Failing that, changing displays
-    /// still takes whatever is frontmost over there, which is the older
-    /// behaviour and the one that needs no placement fit.
-    func gazedTarget(alreadyOn owner: CGDirectDisplayID? = nil)
-        -> (display: CGDirectDisplayID, pid: pid_t, bounds: CGRect, reason: String)? {
-        guard let display = gazedDisplay(),
-              let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
-        else { return nil }
+    /// Returns a reason even when it declines, because the debug overlay reads
+    /// this and going blank is useless exactly when you're working out why.
+    /// Deliberately says nothing about whether the window is already focused:
+    /// that's "would a press change anything", and it lives in `gazedWindow`.
+    /// It used to live here, which darkened the overlay whenever you looked at
+    /// the window you were already in.
+    enum Target {
+        case window(display: CGDirectDisplayID, pid: pid_t, bounds: CGRect, reason: String)
+        /// Nothing to act on, and the reason, which is the overlay's caption.
+        case none(String)
+
+        var pick: (display: CGDirectDisplayID, pid: pid_t, bounds: CGRect, reason: String)? {
+            guard case let .window(display, pid, bounds, reason) = self else { return nil }
+            return (display: display, pid: pid, bounds: bounds, reason: reason)
+        }
+
+        var reason: String {
+            switch self {
+            case let .window(_, _, _, reason): return reason
+            case let .none(why): return why
+            }
+        }
+    }
+
+    func gazedTarget(alreadyOn owner: CGDirectDisplayID? = nil) -> Target {
+        guard Settings.shared.gazeEnabled else { return .none("off") }
+        guard Settings.shared.gazeProfile != nil else { return .none("not calibrated") }
+        guard reading() != nil else { return .none("no recent frame") }
+        guard let display = gazedDisplay() else { return .none("displays too close to call") }
+        guard let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
+        else { return .none("display went away") }
 
         let candidates = windows(on: screen)
-        guard !candidates.isEmpty else { return nil }
-        let focused = focusedWindow().flatMap(frame(of:))
+        guard !candidates.isEmpty else { return .none("no windows on display \(display)") }
 
         var picked: (pid: pid_t, bounds: CGRect)?
         var reason = "frontmost"
+        var declined = "no dot to place"
         if let point = gazedPoint() {
-            // Whatever is on top at that point, and only that. The list is front
-            // to back, so the first window containing the point is the one you
-            // can actually see there.
-            //
-            // Testing the inset while searching, rather than after, is what this
-            // avoids. That version walked past a front window whose margin the
-            // dot had landed in and focused a window behind it, which is a
-            // window you are provably not looking at, since something else is
-            // drawn over the spot you're looking at.
+            // Whatever is on top at that point, and only that. The list is
+            // front to back, so the first window containing the point is the one
+            // you can actually see there. Testing the inset while searching
+            // instead of after would walk past a front window whose margin the
+            // dot landed in and focus one behind it, which is a window something
+            // else is drawn over and you are provably not looking at.
             if let top = candidates.first(where: { $0.bounds.contains(point) }) {
                 // Inset because a dot near an edge is as likely to belong to
                 // whatever is on the other side of it, and a gesture that flips
@@ -294,21 +318,28 @@ final class GazeFocus {
                 if margin.contains(point) {
                     picked = top
                     reason = "by dot"
+                } else {
+                    declined = "dot is in the edge of \(name(of: top.pid))"
                 }
+            } else {
+                declined = "dot is not over a window"
             }
         }
         if picked == nil {
             // Nothing clearly under the estimate. A different display still
             // means the frontmost window there; the same display means leave
             // whatever you're working on alone.
-            guard owner != display else { return nil }
+            guard owner != display else { return .none(declined) }
             picked = candidates.first
         }
 
-        guard let chosen = picked else { return nil }
-        // Already on it, so there's nothing to move focus to.
-        if let focused, nearlyEqual(focused, chosen.bounds) { return nil }
-        return (display: display, pid: chosen.pid, bounds: chosen.bounds, reason: reason)
+        guard let chosen = picked else { return .none(declined) }
+        return .window(display: display, pid: chosen.pid, bounds: chosen.bounds, reason: reason)
+    }
+
+    /// App name for a pid, for the overlay caption only.
+    private func name(of pid: pid_t) -> String {
+        NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
     }
 
     /// Normal windows whose centre sits on `screen`, front to back.

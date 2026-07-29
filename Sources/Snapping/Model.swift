@@ -15,22 +15,8 @@ enum Layer: CaseIterable {
     var menuTitle: String {
         switch self {
         case .halves: return "Halves & Quarters"
-        case .thirds: return "Thirds"
+        case .thirds: return "Thirds & Sixths"
         case .displays: return "Displays"
-        }
-    }
-
-    /// Arrows this layer answers to. The thirds layer used to sub-halve a slot
-    /// on up and down, which is where sixths came from; it doesn't any more, so
-    /// it has no use for the vertical arrows.
-    ///
-    /// Worth listing rather than ignoring the presses, because a bound hot key
-    /// is taken from every other app on the machine whether this one acts on it
-    /// or not. Not binding them hands ⌘⌥↑ and ⌘⌥↓ back.
-    var directions: [Direction] {
-        switch self {
-        case .thirds: return [.left, .right]
-        case .halves, .displays: return [.left, .right, .up, .down]
         }
     }
 }
@@ -88,16 +74,14 @@ let gazeMargin = 0.85
 /// The decision is made at the instant a key is pressed, from the newest frames
 /// only, rather than from a running estimate that has to settle first.
 ///
-/// This is the whole latency budget. An earlier version smoothed every frame
-/// into a moving average and then required the winner to hold a lead for
-/// several frames before it counted, which stacked the smoothing lag on top of
-/// the hold and made a deliberate glance take seconds to register. Nothing acts
-/// on the estimate continuously, so none of that damping bought anything: the
-/// only moment the answer matters is the moment of the press.
+/// This is the whole latency budget. An earlier version smoothed frames into a
+/// moving average and made the winner hold a lead before it counted, stacking
+/// two lags and turning a deliberate glance into a multi-second wait. Nothing
+/// acts on the estimate continuously, so the damping bought nothing: the only
+/// moment the answer matters is the press.
 ///
-/// A median of the last few frames instead of a mean, because a median tracks a
-/// step as soon as most of its window is past the step, while still throwing
-/// out a single bad landmark fit.
+/// Median rather than mean, because a median tracks a step as soon as most of
+/// its window is past it while still discarding one bad landmark fit.
 let gazeDecisionFrames = 3
 let gazeDecisionWindow: TimeInterval = 0.4
 
@@ -108,11 +92,10 @@ let gazeHistoryWindow: TimeInterval = 1.0
 /// as the one you mean, capped at a fifth of the window so small ones stay
 /// reachable.
 ///
-/// Gaze from a webcam is good to a few degrees, which is a couple of hundred
-/// pixels at desk distance, so a dot near the seam between two windows carries
-/// no real opinion about which side it's on. Requiring it to be properly inside
-/// trades a few "did nothing" presses for not flipping between two windows as
-/// you read along their shared edge.
+/// Webcam gaze is good to a few degrees, a couple of hundred pixels at desk
+/// distance, so a dot near the seam between two windows carries no real opinion
+/// about which side it's on. Requiring it properly inside trades a few "did
+/// nothing" presses for not flipping as you read along a shared edge.
 let gazeWindowInset: CGFloat = 80
 
 /// Clicking a display says plainly which screen you mean, so it outranks gaze
@@ -155,25 +138,20 @@ let gazeStatusRefresh: TimeInterval = 0.2
 /// Calibration runs twice, once holding your head still and once moving
 /// naturally, and keeps both sets of readings.
 ///
-/// One pass isn't enough, and which single pass you pick doesn't rescue it.
-/// Calibrating head-free teaches it that yaw is the signal, so a glance without
-/// a head turn registers nothing, which is what the first version did. Doing
-/// only the still pass inverts the problem: replaying a head-free session
-/// against a still-only profile lands roughly a third of frames on the wrong
-/// display, because the head absorbs angle the eyes were calibrated to cover.
-/// Keeping both, and matching against individual readings rather than a
-/// per-display average, handles either style. See tools/gaze_eval.py.
+/// One pass isn't enough either way round. Head-free teaches it that yaw is the
+/// signal, so a glance without a head turn registers nothing. Still-only
+/// inverts it: a head-free session replayed against a still-only profile puts
+/// about a third of frames on the wrong display, because the head absorbs angle
+/// the eyes were calibrated to cover. See tools/gaze_eval.py.
 enum GazeCalibrationStyle: CaseIterable {
     case still, free
 
     /// Shown throughout the pass, including under the count-in.
     ///
-    /// The still pass says "for this whole pass" deliberately. Holding your head
-    /// still only within one screen and then re-aiming it at the next makes the
-    /// pass a second copy of the free one, and the eye-only extreme it exists to
-    /// record never gets recorded. Reaching as far as is comfortable rather than
-    /// straining is part of it too: a reading taken at the limit of how far your
-    /// eyes will go is one you'll never reproduce while actually working.
+    /// "For this whole pass" is deliberate: holding still within one screen and
+    /// re-aiming at the next makes this a second copy of the free pass, and the
+    /// eye-only extreme never gets recorded. So is "as far as is comfortable" —
+    /// a reading taken at the limit of your eyes is one you'll never reproduce.
     var hint: String {
         switch self {
         case .still:
@@ -204,15 +182,12 @@ enum GazeCalibrationStyle: CaseIterable {
 
 /// Targets per display per pass, as fractions of its frame: a 3x3 grid.
 ///
-/// It was four corners, which is enough to fit each axis of the dot from its own
-/// terms but not enough to also fit the cross terms, nor to see any curvature.
-/// Two rows in particular means the vertical fit is a straight line through two
-/// clusters, with no third level able to contradict it.
-///
-/// That mattered once the target became picking a window rather than a display.
-/// Measured on a real capture, four corners put the dot in the right half of a
-/// 3440x1440 screen 96.9% of the time horizontally and 60.3% vertically, and
-/// 60.3% is a coin flip. Nine dots is about twenty seconds more.
+/// Four corners can fit each axis from its own terms but can't pay for the cross
+/// terms or see any curvature, and two rows make the vertical fit a straight
+/// line through two clusters with no third level to contradict it. That was
+/// survivable while the job was picking a display and became the limit as soon
+/// as it was picking a window: four corners scored 60.3% vertically on a
+/// 3440x1440 screen, which is a coin flip. Nine dots costs twenty seconds more.
 let gazeCalibrationTargets: [CGPoint] = [
     CGPoint(x: 0.12, y: 0.14), CGPoint(x: 0.50, y: 0.14), CGPoint(x: 0.88, y: 0.14),
     CGPoint(x: 0.12, y: 0.50), CGPoint(x: 0.50, y: 0.50), CGPoint(x: 0.88, y: 0.50),

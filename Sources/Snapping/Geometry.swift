@@ -151,3 +151,11 @@ func matchingSlot(_ window: CGRect, in area: CGRect) -> Int? {
     }
     return nil
 }
+
+func nearestSlot(_ window: CGRect, in area: CGRect) -> Int {
+    let scored = thirdSlots.enumerated().map { index, slot -> (Int, CGFloat) in
+        let rect = slot.rect(in: area)
+        return (index, abs(rect.midX - window.midX) + abs(rect.width - window.width))
+    }
+    return scored.min { $0.1 < $1.1 }?.0 ?? 1
+}

@@ -3,14 +3,12 @@ import AppKit
 /// Writes every frame a calibration saw to a CSV, labelled with the display and
 /// point that was on screen at the time.
 ///
-/// This exists so the classifier can be worked on offline. Tuning it by asking
-/// "does it feel better now" needs a person, a rebuild and a fresh opinion for
-/// every change, which is slow enough that it mostly gets guessed at instead.
-/// A labelled capture makes it a scoring problem: `tools/gaze_eval.py` replays
-/// these files through candidate metrics and prints how each one does.
-///
-/// Files land in ~/Library/Logs/Shiftly-gaze/ and accumulate, so a metric can be
-/// checked against sessions it wasn't tuned on.
+/// This exists so the classifier can be worked on offline. Tuning by feel needs a
+/// person, a rebuild and a fresh opinion per change, which is slow enough that it
+/// mostly gets guessed at instead; a labelled capture makes it a scoring problem.
+/// `tools/gaze_eval.py` replays these. Files accumulate in
+/// ~/Library/Logs/Shiftly-gaze/, so a change can be tested against sessions it
+/// wasn't tuned on — which is the only way to catch a fit that flatters itself.
 enum GazeCapture {
     static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser

@@ -111,12 +111,15 @@ final class GazeDebugOverlay {
             // The ratio is the whole decision: below the margin it acts, above
             // it the two displays are too close to call and it leaves focus be.
             let ratio = ranked.count > 1 ? ranked[0].distance / max(ranked[1].distance, 0.0001) : 0
-            caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f  lid %.2f"
-                                + "  pose %.2f/%.2f/%.2f   window %@",
-                             scores, ratio, gazeMargin,
-                             reading.headX, reading.headY, reading.eyeX, reading.eyeY,
-                             reading.lidY, reading.faceYaw, reading.facePitch, reading.faceRoll,
-                             window?.reason ?? "none")
+            // Two lines rather than one. This used to be a single row that ran
+            // wider than the display and got clipped at both ends, which took
+            // out the window reason on the right and the display scores on the
+            // left — the two things it exists to tell you.
+            caption = String(format: "%@   ratio %.2f / %.2f   window: %@",
+                             scores, ratio, gazeMargin, window.reason)
+                + String(format: "\nhead %.2f/%.2f   eye %.2f/%.2f   lid %.2f   pose %.2f/%.2f/%.2f",
+                         reading.headX, reading.headY, reading.eyeX, reading.eyeY,
+                         reading.lidY, reading.faceYaw, reading.facePitch, reading.faceRoll)
             // A blank screen otherwise reads as a broken tracker rather than an
             // old calibration that predates the dot having anywhere to go.
             if !profile.hasPoints {
@@ -129,7 +132,7 @@ final class GazeDebugOverlay {
         for (identifier, view) in views {
             view.trail = identifier == chosen ? trail : []
             view.isChosen = identifier == chosen
-            view.windowRect = window?.display == identifier ? window?.bounds : nil
+            view.windowRect = window.pick?.display == identifier ? window.pick?.bounds : nil
             view.caption = caption
             view.needsDisplay = true
         }
@@ -197,15 +200,29 @@ final class GazeDotView: NSView {
         }
 
         guard isChosen, !caption.isEmpty else { return }
+        // Laid out in a bounded rect rather than drawn at a point. Drawing at a
+        // point puts everything on one line however wide that gets, and the box
+        // was centred without a clamp, so on a narrow display the caption ran
+        // off both edges at once and lost the two fields worth reading.
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph,
         ]
-        let size = caption.size(withAttributes: attributes)
-        let box = NSRect(x: (bounds.width - size.width) / 2 - 10, y: 24,
-                         width: size.width + 20, height: size.height + 12)
+        let limit = max(bounds.width - 60, 200)
+        let text = caption as NSString
+        let measured = text.boundingRect(with: NSSize(width: limit, height: 400),
+                                         options: [.usesLineFragmentOrigin],
+                                         attributes: attributes)
+        let box = NSRect(x: max((bounds.width - measured.width) / 2 - 10, 10), y: 24,
+                         width: min(measured.width + 20, bounds.width - 20),
+                         height: measured.height + 12)
         NSColor.black.withAlphaComponent(0.68).setFill()
         NSBezierPath(roundedRect: box, xRadius: 7, yRadius: 7).fill()
-        caption.draw(at: NSPoint(x: box.minX + 10, y: box.minY + 6), withAttributes: attributes)
+        text.draw(with: box.insetBy(dx: 10, dy: 6),
+                  options: [.usesLineFragmentOrigin], attributes: attributes)
     }
 }

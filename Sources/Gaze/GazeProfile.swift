@@ -15,19 +15,16 @@ struct GazeReference {
 
 /// What "looking at that display" measures like, learned from calibration.
 ///
-/// This replaced a linear map from face geometry to desktop coordinates. That
-/// map had to be told which way round the camera was mounted and how far a face
-/// turns before it means anything, which is where the Flip Horizontal control
-/// came from. Since the only question ever asked is which display, none of that
-/// is needed: label a handful of readings per display and compare against them.
-/// Mirroring, mounting, and how far you personally turn your head all fall out
-/// of the labels for free, with nothing left for anyone to configure.
+/// This replaced a linear map from face geometry to desktop coordinates, which
+/// had to be told how the camera was mounted and how far a face turns before it
+/// means anything — the origin of the old Flip Horizontal control. Comparing
+/// against labelled readings instead makes mirroring, mounting and how far you
+/// personally turn your head fall out of the calibration for free, with nothing
+/// left to configure.
 ///
-/// The axes are weighted by how well each one separates the displays against
-/// how precisely it can be measured, both taken from the calibration readings.
-/// Hand-picked weights can't know which axis carries the signal on a given
-/// desk: side by side it's yaw, stacked it's pitch, and held still it's the
-/// pupils.
+/// Axis weights are learned too: display separation over measurement precision.
+/// Hand-picked weights can't know which axis carries the signal on a given desk
+/// — side by side it's yaw, stacked it's pitch, held still it's the pupils.
 struct GazeProfile {
     let references: [GazeReference]
 
@@ -41,12 +38,10 @@ struct GazeProfile {
 
     /// Every display and how far its nearest reading is, nearest first.
     ///
-    /// Nearest reading rather than nearest average. Once the axes are scaled by
-    /// measurement noise instead of by how much they vary across a display, the
-    /// spread within a display is real information about where on it you were
-    /// looking, and collapsing five readings to their mean throws it away. On an
-    /// ultrawide that mean sits in the middle of a screen wide enough that its
-    /// two edges measure nothing alike.
+    /// Nearest reading rather than nearest average. Once axes are scaled by
+    /// measurement noise, the spread within a display is real information about
+    /// where on it you were looking, and a mean throws it away — on an ultrawide
+    /// that mean sits mid-screen, and the two edges measure nothing alike.
     func ranking(for sample: GazeSample) -> [(display: CGDirectDisplayID, distance: Double)] {
         var closest: [CGDirectDisplayID: Double] = [:]
         for reference in references {
@@ -71,18 +66,15 @@ struct GazeProfile {
     /// coordinates, or nil if the calibration can't pin one down.
     ///
     /// Fitted separately from the display choice, and that separation is the
-    /// point. The classifier scales each axis by how well it tells displays
-    /// apart, which on a side-by-side desk weights vertical at about a quarter
-    /// of horizontal — correct, because vertical says nothing about which of
-    /// two screens beside each other you're on. Blending calibration points
-    /// through that same metric made the dot slide left and right while barely
-    /// moving up or down, and sit near the middle of whichever screen won.
+    /// point. The classifier scales each axis by how well it separates displays,
+    /// which on a side-by-side desk weights vertical at a quarter of horizontal
+    /// — correct, since vertical says nothing about which of two adjacent
+    /// screens you're on. Drawing the dot through that same metric made it slide
+    /// sideways while barely moving up or down.
     ///
-    /// Placement wants the opposite: every axis at face value, fitted to where
-    /// you were actually looking. Horizontal gaze is mostly head yaw plus eye
-    /// yaw and vertical mostly head pitch plus eye pitch, so each is a
-    /// least-squares fit per display, over its own two axes and — where the
-    /// calibration has the dots to support it — the other two as well.
+    /// Placement wants the opposite: every axis at face value, least-squares fit
+    /// per display, each direction over its own axes plus the others as
+    /// corrections.
     func point(for sample: GazeSample) -> CGPoint? {
         guard let display = display(for: sample), let fit = placements[display] else { return nil }
         return CGPoint(x: fit.x(sample), y: fit.y(sample))
@@ -103,36 +95,21 @@ struct GazeProfile {
         }.squareRoot()
     }
 
-    /// The axes the profile actually learns from, which is not everything a
-    /// reading carries: `GazeSample.axes` also holds Vision's head pose, which
-    /// is recorded but deliberately not fitted.
+    /// The axes the profile learns from. `GazeSample.axes` carries more: Vision's
+    /// head pose is recorded but deliberately not fitted.
     ///
-    /// The pose looked like the obvious fix. `headX` and `headY` are two
-    /// landmark centroids over a third distance, a crude estimator of a
-    /// rotation, and the head term is the part of the placement fit that runs
-    /// out first, so a trained pose model should beat them. Measured on two
-    /// calibrations recorded back to back, training on one and testing on the
-    /// other, every way of including it came out worse: summing both axes and
-    /// both directions of the split, 720px without the pose against 814px for
-    /// yaw and pitch, 853px for yaw alone and 939px for all three. Scoring
-    /// within a single capture reverses that and says yaw helps, which is what
-    /// makes this worth writing down — at eighteen dots a display, extra
-    /// parameters fit the session rather than the person.
+    /// It should have helped, since `headX`/`headY` are crude landmark ratios
+    /// estimating the same rotation. It doesn't. Training on one calibration and
+    /// testing on another, every way of including it scored worse (720px without
+    /// against 814px for yaw and pitch, 939px for all three), because it isn't
+    /// new information: `faceYaw` correlates with `headX` at r = 0.87. A
+    /// near-collinear column costs coefficient variance and adds no signal.
     ///
-    /// The reason is that it isn't new information. Across the calibration dots
-    /// `faceYaw` correlates with `headX` at r = 0.87 and with `headY` at 0.72:
-    /// it measures what the ratios already measure, so it buys a near-collinear
-    /// column, and those inflate coefficient variance without adding signal.
-    /// The head estimate being weak is real, but a second estimate of the same
-    /// weak thing isn't the fix.
-    ///
-    /// The display classifier is a closer call and was nearly split out, since
-    /// nearest-neighbour pays no parameter cost for an extra axis. It doesn't
-    /// survive either: training on one calibration and testing on the other,
-    /// the pose cuts wrong-display decisions from 2.9% to 0.6% in one direction
-    /// and raises them from 1.2% to 2.7% in the other, while adding lag. A
-    /// difference whose sign depends on which capture trains is not a
-    /// difference two captures can resolve.
+    /// Scoring within one capture reverses that verdict, which is the part worth
+    /// remembering: at eighteen dots a display, extra parameters fit the session
+    /// rather than the person. The classifier was a closer call, since
+    /// nearest-neighbour pays no parameter cost, but its sign flipped depending
+    /// on which capture trained. See `tools/gaze_eval.py --placement`.
     private static let fitted: [WritableKeyPath<GazeSample, Double>] =
         [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY]
 
@@ -173,18 +150,13 @@ struct GazeProfile {
     /// Terms for one axis of one display: every measured axis, linearly, with
     /// the ones that carry this direction first.
     ///
-    /// Second-order terms are the standard mapping in the eye tracking
-    /// literature and they were tried properly here. Fixed and measured against
-    /// held-out dots they win on exactly one axis of one display, taking the
-    /// ultrawide's vertical fit from 184px to 136px, while pushing its
-    /// horizontal from 66px to 86px and making both axes of a portrait display
-    /// worse. Choosing per axis from the calibration then scored worse than
-    /// linear everywhere, 203px horizontal against 144px: at eighteen dots the
-    /// gap between the two shapes sits inside the noise, so the choice comes out
-    /// close to a coin flip, and the polynomial extrapolates badly when it loses.
-    ///
-    /// A shape that wins a quarter of the time and can't be identified when is
-    /// worth less than the one that never blows up. `Term` stays general so the
+    /// Second-order terms are the standard mapping in the eye tracking literature
+    /// and were tried properly. Against held-out dots they win on exactly one
+    /// axis of one display (ultrawide vertical, 184px to 136px) while hurting its
+    /// horizontal and both axes of a portrait display. Choosing per axis then
+    /// scored worse than linear everywhere, 203px against 144px: at eighteen dots
+    /// the gap sits inside the noise, so the choice is near a coin flip and the
+    /// polynomial extrapolates badly when it loses. `Term` stays general so the
     /// next attempt is a change here rather than a rewrite.
     private static func terms(own: [Int], cross: [Int]) -> [Term] {
         (own + cross).map { Term(first: $0, second: nil) }
@@ -283,17 +255,13 @@ struct GazeProfile {
     /// Weight per axis: how far the displays sit apart on it, over how precisely
     /// it can be measured at all.
     ///
-    /// The denominator matters more than it looks. It used to be how much the
-    /// axis varied across one display's readings, which quietly punished the
-    /// pupil terms: calibration dots span a whole screen, so pupil position
-    /// varies over its full range at every display, and the axis carrying the
-    /// most usable information scored as the noisiest. The result was a profile
-    /// that put essentially all its weight on head yaw and then needed a real
-    /// head turn to register anything.
-    ///
-    /// Using per-frame jitter instead — how much an axis wobbles while you hold
-    /// a single dot — separates "moves a lot because it's tracking something"
-    /// from "moves a lot because it can't be pinned down".
+    /// The denominator is the subtle part. It used to be the axis's spread across
+    /// one display's dots, which buried the pupil terms: dots span a whole
+    /// screen, so pupil position sweeps its full range on every display and the
+    /// most informative axis scored as the noisiest. That profile put nearly all
+    /// its weight on head yaw and needed a real head turn to notice anything.
+    /// Per-frame jitter instead separates "moves because it's tracking
+    /// something" from "moves because it can't be pinned down".
     private static func fit(_ groups: [CGDirectDisplayID: [GazeSample]],
                             noise: GazeSample?) -> GazeSample {
         func weight(_ axis: WritableKeyPath<GazeSample, Double>) -> Double {
@@ -340,10 +308,9 @@ struct GazeProfile {
     /// axis, then the point on screen if it was recorded.
     ///
     /// The tag is what makes an older calibration fail to load rather than load
-    /// wrong. `eyeY` used to be scaled by eye height and is now scaled by eye
-    /// width, so the same number means a different angle: a profile from before
-    /// that would parse cleanly and then send windows to the wrong place, which
-    /// is worse than asking for a minute of recalibration.
+    /// wrong. Several changes have altered what a recorded number means without
+    /// altering its shape, and such a profile parses cleanly and then sends
+    /// windows to the wrong place, which is worse than asking for a recalibration.
     var storage: [[Double]] {
         references.map { reference in
             var row = [Double(GazeProfile.format), Double(reference.display)]
@@ -356,20 +323,17 @@ struct GazeProfile {
         }
     }
 
-    /// Negative on purpose. A row used to begin with a display id, which is
-    /// unsigned, so a negative leading value is one an older profile can never
-    /// produce. Tagging with 2 very nearly shipped: a pre-point row from display
-    /// 2 is seven numbers beginning with a 2, which is also exactly the shape of
-    /// a tagged row without a point, and it parsed clean.
+    /// Negative on purpose: rows used to begin with an unsigned display id, so a
+    /// negative leading value is one an older profile can never produce. Tagging
+    /// with 2 nearly shipped — a pre-point row from display 2 is seven numbers
+    /// starting with a 2, exactly the shape of a tagged row without a point.
     ///
-    /// Every version after 2 has the same width, so the tag is the only thing
+    /// Versions 3 onward are all the same width, so the tag is the only thing
     /// separating them, and each was wrong in a way nothing downstream could
-    /// notice. 3 took its pose from a landmarks pass, which reports yaw as one
-    /// of three values and pitch and roll as flat zero — and zero radians reads
-    /// as a face pointing straight at the camera, not as a missing reading. 4
-    /// fixed the pose but seeded the landmarks from the rectangles pass, so
-    /// every landmark ratio was measured inside a different bounding box than
-    /// the one the app now uses. Both would load and quietly mis-place.
+    /// notice. 3 read its pose off a landmarks pass, giving a three-valued yaw
+    /// and flat-zero pitch and roll, and zero radians reads as a face pointing
+    /// at the camera rather than as a missing reading. 4 fixed the pose but
+    /// measured landmarks inside the wrong bounding box.
     private static let format = -5
 
     /// Whether the dot has anywhere to go, which the debug overlay reports so a

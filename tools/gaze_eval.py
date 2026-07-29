@@ -297,13 +297,11 @@ def arrangement(path):
     return out
 
 
-# The layouts Shiftly can snap to, as (name, columns, rows). Quarters is the
-# demanding one: on a 3440x1440 ultrawide its tiles are 1720x720.
-#
-# Sixths used to be here and is gone with the layout itself. It scored 9.8%
-# wrong on the ultrawide and 15.6% on a portrait display, against 2.6% for
-# halves, which is what retired it.
-LAYOUTS = [("halves", 2, 1), ("thirds", 3, 1), ("quarters", 2, 2)]
+# The layouts Shiftly can snap to, as (name, columns, rows). Sixths is the
+# demanding one: on a 3440x1440 ultrawide its tiles are 1147x720, which is
+# where the estimate starts costing more than it saves. It is deliberately
+# still scored rather than dropped, so the number stays visible.
+LAYOUTS = [("halves", 2, 1), ("thirds", 3, 1), ("quarters", 2, 2), ("sixths", 3, 2)]
 
 # Matches gazeWindowInset in Model.swift: how far inside a window the estimate
 # has to land before that window counts as the one you meant.

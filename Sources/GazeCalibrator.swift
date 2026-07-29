@@ -151,25 +151,19 @@ final class GazeCalibrator {
             log("gaze: no face seen while looking at display \(display)")
         } else {
             let count = Double(collected.count)
-            let mean = GazeSample(
-                headX: collected.reduce(0) { $0 + $1.headX } / count,
-                headY: collected.reduce(0) { $0 + $1.headY } / count,
-                eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
-                eyeY: collected.reduce(0) { $0 + $1.eyeY } / count,
-                lidY: collected.reduce(0) { $0 + $1.lidY } / count)
+            let mean = GazeSample.perAxis { axis in
+                collected.reduce(0) { $0 + $1[keyPath: axis] } / count
+            }
             references.append(GazeReference(display: display, sample: mean, point: point))
             // The spread inside a single burst, while you held still on one dot,
             // is how precisely each axis can be measured at all. That's the
             // right scale for comparing readings; the spread *across* a
             // display's dots is where you looked, which is signal, not noise.
-            noise.append(GazeSample(headX: spread(collected.map(\.headX)),
-                                    headY: spread(collected.map(\.headY)),
-                                    eyeX: spread(collected.map(\.eyeX)),
-                                    eyeY: spread(collected.map(\.eyeY)),
-                                    lidY: spread(collected.map(\.lidY))))
-            debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f lid %.3f",
-                            display, collected.count, mean.headX, mean.headY,
-                            mean.eyeX, mean.eyeY, mean.lidY))
+            noise.append(GazeSample.perAxis { axis in spread(collected.map { $0[keyPath: axis] }) })
+            let readings = zip(GazeSample.names, GazeSample.axes)
+                .map { String(format: "%@ %.3f", $0, mean[keyPath: $1]) }
+                .joined(separator: " ")
+            debugLog("calibration recorded display \(display) from \(collected.count) frames: \(readings)")
         }
         index += 1
         advance()
@@ -180,12 +174,10 @@ final class GazeCalibrator {
     /// for the whole profile.
     private func pooledNoise() -> GazeSample? {
         guard !noise.isEmpty else { return nil }
-        func middle(_ axis: (GazeSample) -> Double) -> Double {
-            let sorted = noise.map(axis).sorted()
+        return GazeSample.perAxis { axis in
+            let sorted = noise.map { $0[keyPath: axis] }.sorted()
             return sorted[sorted.count / 2]
         }
-        return GazeSample(headX: middle(\.headX), headY: middle(\.headY),
-                          eyeX: middle(\.eyeX), eyeY: middle(\.eyeY), lidY: middle(\.lidY))
     }
 
     private func spread(_ values: [Double]) -> Double {

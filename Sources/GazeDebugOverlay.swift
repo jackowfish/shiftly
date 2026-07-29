@@ -111,10 +111,12 @@ final class GazeDebugOverlay {
             // The ratio is the whole decision: below the margin it acts, above
             // it the two displays are too close to call and it leaves focus be.
             let ratio = ranked.count > 1 ? ranked[0].distance / max(ranked[1].distance, 0.0001) : 0
-            caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f  lid %.2f   window %@",
+            caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f  lid %.2f"
+                                + "  pose %.2f/%.2f/%.2f   window %@",
                              scores, ratio, gazeMargin,
                              reading.headX, reading.headY, reading.eyeX, reading.eyeY,
-                             reading.lidY, window?.reason ?? "none")
+                             reading.lidY, reading.faceYaw, reading.facePitch, reading.faceRoll,
+                             window?.reason ?? "none")
             // A blank screen otherwise reads as a broken tracker rather than an
             // old calibration that predates the dot having anywhere to go.
             if !profile.hasPoints {

@@ -29,14 +29,17 @@ import os
 import statistics as st
 import sys
 
-AXES = ["headX", "headY", "eyeX", "eyeY", "lidY"]
+AXES = ["headX", "headY", "eyeX", "eyeY", "lidY", "faceYaw", "facePitch", "faceRoll"]
 CAPTURES = os.path.expanduser("~/Library/Logs/Shiftly-gaze")
 FLOOR = 0.02
 
 # Index of each axis within a row's "x", for the fits that care which is which.
-HEAD_X, HEAD_Y, EYE_X, EYE_Y, LID_Y = range(len(AXES))
-HORIZONTAL = [HEAD_X, EYE_X]
-VERTICAL = [HEAD_Y, EYE_Y, LID_Y]
+HEAD_X, HEAD_Y, EYE_X, EYE_Y, LID_Y, FACE_YAW, FACE_PITCH, FACE_ROLL = range(len(AXES))
+HORIZONTAL = [HEAD_X, EYE_X, FACE_YAW]
+VERTICAL = [HEAD_Y, EYE_Y, LID_Y, FACE_PITCH]
+# Head tilt corrects both directions and carries neither.
+TILT = [FACE_ROLL]
+POSE = [FACE_YAW, FACE_PITCH, FACE_ROLL]
 
 def version(path):
     """Capture format from the header. 1 has no lidY and scales eyeY differently."""
@@ -62,8 +65,10 @@ def load(path):
                 "point": (float(row["targetX"]), float(row["targetY"])),
                 "style": row.get("style", "?"),
                 # A v1 capture has no lidY column and reports eyeY against a
-                # different denominator. Zero-filling keeps it loadable for the
-                # display-level scores, which don't depend on either.
+                # different denominator; a v2 has no head pose. Zero-filling
+                # keeps both loadable for the display-level scores, which don't
+                # depend on either, and a column of zeroes is dropped from the
+                # placement fits rather than making them singular.
                 "x": [float(row[a]) if a in row else 0.0 for a in AXES],
             }
         )
@@ -121,6 +126,10 @@ def train(rows):
         peak = max(w) or 1.0
         return [v / peak for v in w]
 
+    def ablate(off):
+        return norm([0.0 if i in off else between[i] / max(jitter[i], FLOOR)
+                     for i in range(len(AXES))])
+
     return {
         "refs": refs,
         # What shipped first: scaled by how much an axis varies across one
@@ -130,12 +139,16 @@ def train(rows):
         # Scaled by per-frame jitter instead.
         "jitter": norm([between[i] / max(jitter[i], FLOOR) for i in range(len(AXES))]),
         "equal": [1.0] * len(AXES),
-        "eyes_only": [0.0, 0.0, 1.0, 1.0, 1.0],
-        "head_only": [1.0, 1.0, 0.0, 0.0, 0.0],
-        # Jitter-scaled but with the eyelid term switched off, which is how we
-        # find out whether adding it bought anything or just added a dimension.
-        "no_lid": norm([between[i] / max(jitter[i], FLOOR) if i != LID_Y else 0.0
-                        for i in range(len(AXES))]),
+        "eyes_only": [1.0 if i in (EYE_X, EYE_Y, LID_Y) else 0.0 for i in range(len(AXES))],
+        "head_only": [1.0 if i in (HEAD_X, HEAD_Y) + tuple(POSE) else 0.0
+                      for i in range(len(AXES))],
+        # Jitter-scaled with one group switched off, which is how we find out
+        # whether adding it bought anything or only added a dimension.
+        "no_lid": ablate([LID_Y]),
+        "no_pose": ablate(POSE),
+        # The other side of the same question: Vision's pose instead of the
+        # nose-over-eye-line ratios, rather than alongside them.
+        "pose_only": ablate([HEAD_X, HEAD_Y]),
     }
 
 
@@ -251,6 +264,18 @@ def shapes(own, cross, drop=()):
     own = [a for a in own if a not in drop]
     cross = [a for a in cross if a not in drop]
     return [[(a, None) for a in own + cross], [(a, None) for a in own]]
+
+
+def live(terms, pts):
+    """Drop terms that never moved, matching GazeProfile.placement.
+
+    An older capture zero-fills the columns it doesn't have, and a column of one
+    repeated number is the constant term again, which makes the normal equations
+    singular. Dropping the dead term is what lets a v2 capture still be scored
+    against the current fit.
+    """
+    return [t for t in terms
+            if spread([evaluate(t, x) for x, _ in pts]) > 1e-6]
 
 
 def coverage(rows_):
@@ -402,33 +427,44 @@ def placement_report(train_rows, test_rows, weights, frames):
         flatters it. When there's only one capture, each dot is predicted by a
         fit that never saw it.
         """
-        idw_refs, linear = {}, {}
+        idw_refs = {}
         for i, (x, point, display) in enumerate(summary):
             if i == exclude:
                 continue
             idw_refs.setdefault(display, []).append((x, point))
-        no_lid = {}
+
+        # Each variant is the shipped fit with one group of axes withheld, so
+        # the placement table says whether a group earned its parameters rather
+        # than only whether the whole thing moved.
+        # What ships is the pose-free fit. The rest are kept so the measurement
+        # that settled it stays reproducible: Vision's head pose is recorded in
+        # every capture and every way of fitting against it scored worse on a
+        # held-out calibration. See the note on GazeProfile.fitted. Eighteen
+        # dots a display is not many to spend parameters on, so an angle has to
+        # beat not only zero but the parameter it costs.
+        variants = {"linear (ships)": tuple(POSE), "no lidY": (LID_Y,) + tuple(POSE),
+                    "+yaw": (FACE_PITCH, FACE_ROLL),
+                    "+yaw+pitch": (FACE_ROLL,),
+                    "+all pose": (),
+                    "pose replaces head": (HEAD_X, HEAD_Y)}
+        fits = {name: {} for name in variants}
         for display, pts in idw_refs.items():
             def solve(own, cross, index, drop=()):
                 """Fit one axis, matching GazeProfile.placement."""
                 for terms in shapes(own, cross, drop):
+                    terms = live(terms, pts)
                     got = fit_ls([[evaluate(t, x) for t in terms] for x, _ in pts],
                                  [p[index] for _, p in pts])
                     if got:
                         return terms, got
                 return None
 
-            full = (solve(HORIZONTAL, VERTICAL, 0), solve(VERTICAL, HORIZONTAL, 1))
-            if all(full):
-                linear[display] = full
-            # The same selection with the eyelid term removed, so the placement
-            # table can say whether it earned its parameter on the axis it was
-            # added for rather than only whether the whole thing got better.
-            bare = (solve(HORIZONTAL, VERTICAL, 0, drop=(LID_Y,)),
-                    solve(VERTICAL, HORIZONTAL, 1, drop=(LID_Y,)))
-            if all(bare):
-                no_lid[display] = bare
-        return idw_refs, linear, no_lid
+            for name, drop in variants.items():
+                both = (solve(HORIZONTAL, VERTICAL + TILT, 0, drop),
+                        solve(VERTICAL, HORIZONTAL + TILT, 1, drop))
+                if all(both):
+                    fits[name][display] = both
+        return idw_refs, fits
 
     def idw(fitted, display, x):
         refs = fitted[0].get(display)
@@ -441,17 +477,14 @@ def placement_report(train_rows, test_rows, weights, frames):
             acc_x += w * point[0]; acc_y += w * point[1]; total += w
         return (acc_x / total, acc_y / total)
 
-    def predict_with(slot):
+    def predict_with(name):
         def go(fitted, display, x):
-            if display not in fitted[slot]:
+            if display not in fitted[1][name]:
                 return None
             def apply(terms, c):
                 return c[0] + sum(c[i + 1] * evaluate(t, x) for i, t in enumerate(terms))
-            return tuple(apply(terms, c) for terms, c in fitted[slot][display])
+            return tuple(apply(terms, c) for terms, c in fitted[1][name][display])
         return go
-
-    lin = predict_with(1)
-    bare = predict_with(2)
 
     # Which fit each test frame is scored against: its own dot held out when
     # train and test are the same capture, otherwise just the one fit.
@@ -461,37 +494,60 @@ def placement_report(train_rows, test_rows, weights, frames):
     else:
         plan = [(build(None), test_rows)]
 
-    print("\nplacement — where the debug dot lands, px from the dot you were told to look at"
-          + ("  (each dot held out)" if same else ""))
-    print(f"{'method':<10} {'err x':>8} {'err y':>8}   {'moves x pred/true':>22}"
-          f"   {'moves y pred/true':>22}")
-    for name, predict in (("idw", idw), ("no lidY", bare), ("linear", lin)):
-        ex, ey, px_, py_, tx_, ty_ = [], [], [], [], [], []
+    def errors(predict):
+        """Absolute residuals per display per axis, plus everything pooled."""
+        out = {}
         for fitted, chunk in plan:
             for row in chunk:
                 got = predict(fitted, row["display"], row["x"])
                 if got is None:
                     continue
-                ex.append(abs(got[0] - row["point"][0])); ey.append(abs(got[1] - row["point"][1]))
-                px_.append(got[0]); py_.append(got[1])
-                tx_.append(row["point"][0]); ty_.append(row["point"][1])
-        if not ex:
-            print(f"{name:<10} (no fit)")
+                for key in (row["display"], "all"):
+                    slot = out.setdefault(key, ([], [], [], [], [], []))
+                    slot[0].append(abs(got[0] - row["point"][0]))
+                    slot[1].append(abs(got[1] - row["point"][1]))
+                    slot[2].append(got[0]); slot[3].append(row["point"][0])
+                    slot[4].append(got[1]); slot[5].append(row["point"][1])
+        return out
+
+    print("\nplacement — where the debug dot lands, px from the dot you were told to look at"
+          + ("  (each dot held out)" if same else ""))
+    print(f"{'method':<14} {'err x':>8} {'err y':>8}   {'moves x pred/true':>22}"
+          f"   {'moves y pred/true':>22}")
+    displays = sorted(frames) or sorted({r["display"] for r in test_rows})
+    per_display = {}
+    for name in ("idw", "no lidY", "linear (ships)",
+                 "+yaw", "+yaw+pitch", "+all pose", "pose replaces head"):
+        got = errors(idw if name == "idw" else predict_with(name))
+        if "all" not in got:
+            print(f"{name:<14} (no fit)")
             continue
+        per_display[name] = got
+        ex, ey, px_, tx_, py_, ty_ = got["all"]
         # "moves" is the standard deviation of the predictions against the truth.
         # A dot stuck near the middle of the screen shows up here as a predicted
         # spread far below the true one, however good the median error looks.
-        print(f"{name:<10} {st.median(ex):>8.0f} {st.median(ey):>8.0f}   "
+        print(f"{name:<14} {st.median(ex):>8.0f} {st.median(ey):>8.0f}   "
               f"{spread(px_):>10.0f} /{spread(tx_):>10.0f}   "
               f"{spread(py_):>10.0f} /{spread(ty_):>10.0f}")
 
-    # A v1 capture has no eyelid column, so the fit that uses one is singular
-    # and predicts nothing. Score the tiles against whichever fit this capture
-    # can actually support rather than printing an empty table.
-    shipping = lin if any(predictor for predictor in
-                          (lin(fitted, row["display"], row["x"])
-                           for fitted, chunk in plan[:1] for row in chunk[:1])) else bare
-    tile_report(plan, shipping, frames)
+    # Pooling the two displays hides the thing worth knowing. The axes that cap
+    # window accuracy are one per display and they aren't the same axis, so a
+    # change that fixes one and breaks the other reads as no change at all in
+    # the median above.
+    print("\nplacement by display and axis, median px")
+    header = "  ".join(f"{f'{d} x':>8} {f'{d} y':>8}" for d in displays)
+    print(f"{'method':<14} {header}")
+    for name, got in per_display.items():
+        cells = []
+        for display in displays:
+            if display in got:
+                cells.append(f"{st.median(got[display][0]):>8.0f} {st.median(got[display][1]):>8.0f}")
+            else:
+                cells.append(f"{'-':>8} {'-':>8}")
+        print(f"{name:<14} {'  '.join(cells)}")
+
+    tile_report(plan, predict_with("linear (ships)"), frames)
 
 
 def main():
@@ -535,16 +591,16 @@ def main():
 
     model = train(train_rows)
     print(f"margin {args.margin}  median-of-{args.frames} frames  {len(test_rows)} test frames\n")
-    print(f"{'metric':<15} {'weights (headX/headY/eyeX/eyeY)':<31} "
+    print(f"{'metric':<15} {'weights (' + '/'.join(AXES) + ')':<62} "
           f"{'acc':>6} {'decided':>8} {'wrong':>7} {'lag':>5}")
 
-    for name in ["spread", "jitter", "equal", "eyes_only", "head_only"]:
+    for name in ["spread", "jitter", "equal", "eyes_only", "head_only", "no_pose", "pose_only"]:
         weights = model[name]
         for centroid in (False, True):
             result = score(model, weights, test_rows, args.margin, args.frames, centroid)
             label = f"{name}{'+cent' if centroid else ''}"
             shown = "/".join(f"{w:.2f}" for w in weights)
-            print(f"{label:<15} {shown:<31} {result['acc']:>6.1%} "
+            print(f"{label:<15} {shown:<62} {result['acc']:>6.1%} "
                   f"{result['decided']:>8.1%} {result['wrong']:>7.1%} {result['lag']:>5.0f}")
 
     # Both usage styles have to work off one profile, and a single-style

@@ -24,20 +24,21 @@ enum GazeCapture {
         private let started = Date()
 
         init() {
-            // v2 adds lidY, and changes what eyeY means: it's scaled by eye
-            // width now, not eye height. The harness keys off this, because
-            // mixing the two in one training set would compare angles measured
+            // v2 added lidY and changed what eyeY means: it's scaled by eye
+            // width now, not eye height. v3 adds Vision's own head pose. The
+            // harness keys off the version, because mixing the two eyeY
+            // definitions in one training set would compare angles measured
             // against different rulers.
-            rows.append("# shiftly gaze capture v2")
+            rows.append("# shiftly gaze capture v3")
             rows.append("# arrangement=\(screenArrangementFingerprint())")
-            rows.append("t,display,targetX,targetY,style,headX,headY,eyeX,eyeY,lidY")
+            rows.append("t,display,targetX,targetY,style," + GazeSample.names.joined(separator: ","))
         }
 
         func add(_ sample: GazeSample, display: CGDirectDisplayID, point: CGPoint,
                  style: GazeCalibrationStyle, at time: TimeInterval) {
-            rows.append(String(format: "%.3f,%u,%.1f,%.1f,%@,%.6f,%.6f,%.6f,%.6f,%.6f",
-                               time, display, point.x, point.y, style.name,
-                               sample.headX, sample.headY, sample.eyeX, sample.eyeY, sample.lidY))
+            let axes = GazeSample.axes.map { String(format: "%.6f", sample[keyPath: $0]) }
+            rows.append(String(format: "%.3f,%u,%.1f,%.1f,%@,", time, display, point.x, point.y, style.name)
+                + axes.joined(separator: ","))
         }
 
         /// Returns the file written, or nil if there was nothing worth keeping.

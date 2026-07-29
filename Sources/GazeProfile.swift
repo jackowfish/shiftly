@@ -90,20 +90,50 @@ struct GazeProfile {
 
     /// How readable each axis turned out to be, for the debug trace.
     var weightSummary: String {
-        String(format: "headX %.2f headY %.2f eyeX %.2f eyeY %.2f lidY %.2f",
-               weights.headX, weights.headY, weights.eyeX, weights.eyeY, weights.lidY)
+        zip(GazeSample.names, GazeSample.axes)
+            .filter { GazeProfile.fitted.contains($0.1) }
+            .map { String(format: "%@ %.2f", $0, weights[keyPath: $1]) }
+            .joined(separator: " ")
     }
 
     private func distance(_ a: GazeSample, _ b: GazeSample) -> Double {
-        GazeProfile.measured.reduce(0) { total, axis in
+        GazeProfile.fitted.reduce(0) { total, axis in
             let delta = (a[keyPath: axis] - b[keyPath: axis]) * weights[keyPath: axis]
             return total + delta * delta
         }.squareRoot()
     }
 
-    /// Every axis a reading carries, so adding one is a single edit here rather
-    /// than a term to remember in four different sums.
-    private static let measured: [WritableKeyPath<GazeSample, Double>] =
+    /// The axes the profile actually learns from, which is not everything a
+    /// reading carries: `GazeSample.axes` also holds Vision's head pose, which
+    /// is recorded but deliberately not fitted.
+    ///
+    /// The pose looked like the obvious fix. `headX` and `headY` are two
+    /// landmark centroids over a third distance, a crude estimator of a
+    /// rotation, and the head term is the part of the placement fit that runs
+    /// out first, so a trained pose model should beat them. Measured on two
+    /// calibrations recorded back to back, training on one and testing on the
+    /// other, every way of including it came out worse: summing both axes and
+    /// both directions of the split, 720px without the pose against 814px for
+    /// yaw and pitch, 853px for yaw alone and 939px for all three. Scoring
+    /// within a single capture reverses that and says yaw helps, which is what
+    /// makes this worth writing down — at eighteen dots a display, extra
+    /// parameters fit the session rather than the person.
+    ///
+    /// The reason is that it isn't new information. Across the calibration dots
+    /// `faceYaw` correlates with `headX` at r = 0.87 and with `headY` at 0.72:
+    /// it measures what the ratios already measure, so it buys a near-collinear
+    /// column, and those inflate coefficient variance without adding signal.
+    /// The head estimate being weak is real, but a second estimate of the same
+    /// weak thing isn't the fix.
+    ///
+    /// The display classifier is a closer call and was nearly split out, since
+    /// nearest-neighbour pays no parameter cost for an extra axis. It doesn't
+    /// survive either: training on one calibration and testing on the other,
+    /// the pose cuts wrong-display decisions from 2.9% to 0.6% in one direction
+    /// and raises them from 1.2% to 2.7% in the other, while adding lag. A
+    /// difference whose sign depends on which capture trains is not a
+    /// difference two captures can resolve.
+    private static let fitted: [WritableKeyPath<GazeSample, Double>] =
         [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY]
 
     // MARK: Placement
@@ -134,7 +164,7 @@ struct GazeProfile {
     /// The measured axes in one fixed order, so a solved coefficient vector
     /// reads back onto the right terms. Grouped horizontal first, then vertical,
     /// so each axis of the dot takes a contiguous slice as the terms that carry
-    /// it directly.
+    /// it directly, with the ones that point nowhere on their own last.
     private static let axes: [KeyPath<GazeSample, Double>] =
         [\.headX, \.eyeX, \.headY, \.eyeY, \.lidY]
     private static let horizontal = [0, 1]
@@ -203,16 +233,29 @@ struct GazeProfile {
                                   own: [Int],
                                   cross: [Int],
                                   value: (CGPoint) -> CGFloat) -> Placement? {
-        var chosen = terms(own: own, cross: cross)
+        let values = group.map { Double(value($0.point!)) }
+        func columns(_ terms: [Term]) -> [[Double]] {
+            group.map { reference in terms.map { $0.value(reference.sample, axes) } }
+        }
+        // A term that never moved across the whole calibration is a column of
+        // one repeated number, which is the constant term again and makes the
+        // normal equations singular. Vision hands back no angle at all on some
+        // cameras, so this is a real case rather than a defensive one, and
+        // dropping the dead term beats refusing to place a dot.
+        func live(_ candidates: [Term]) -> [Term] {
+            let features = columns(candidates)
+            return candidates.enumerated().filter { index, _ in
+                spread(features.map { $0[index] }) > 1e-6
+            }.map(\.element)
+        }
+
+        var chosen = live(terms(own: own, cross: cross))
         // Fall back to the carrying axes alone when a small calibration can't
         // support the corrections, so a short profile still places a dot.
-        var features = group.map { reference in chosen.map { $0.value(reference.sample, axes) } }
-        let values = group.map { Double(value($0.point!)) }
-        if solve(features: features, values: values) == nil {
-            chosen = own.map { Term(first: $0, second: nil) }
-            features = group.map { reference in chosen.map { $0.value(reference.sample, axes) } }
+        if solve(features: columns(chosen), values: values) == nil {
+            chosen = live(own.map { Term(first: $0, second: nil) })
         }
-        guard let solved = solve(features: features, values: values) else { return nil }
+        guard let solved = solve(features: columns(chosen), values: values) else { return nil }
         return Placement(constant: solved[0],
                          terms: Array(zip(chosen, solved.dropFirst()).map { (term: $0, weight: $1) }))
     }
@@ -266,13 +309,13 @@ struct GazeProfile {
             return between / max(scale, gazeAxisFloor)
         }
 
-        var raw = GazeSample(headX: 0, headY: 0, eyeX: 0, eyeY: 0, lidY: 0)
-        for axis in measured { raw[keyPath: axis] = weight(axis) }
+        var raw = GazeSample()
+        for axis in fitted { raw[keyPath: axis] = weight(axis) }
         // Scale is arbitrary since only ratios of distances are ever compared;
         // normalising just makes the trace readable.
-        let peak = measured.map { raw[keyPath: $0] }.max() ?? 0
+        let peak = fitted.map { raw[keyPath: $0] }.max() ?? 0
         if peak > 0 {
-            for axis in measured { raw[keyPath: axis] /= peak }
+            for axis in fitted { raw[keyPath: axis] /= peak }
         }
         return raw
     }
@@ -304,7 +347,7 @@ struct GazeProfile {
     var storage: [[Double]] {
         references.map { reference in
             var row = [Double(GazeProfile.format), Double(reference.display)]
-            row += GazeProfile.measured.map { reference.sample[keyPath: $0] }
+            row += GazeSample.axes.map { reference.sample[keyPath: $0] }
             if let point = reference.point {
                 row.append(Double(point.x))
                 row.append(Double(point.y))
@@ -318,7 +361,16 @@ struct GazeProfile {
     /// produce. Tagging with 2 very nearly shipped: a pre-point row from display
     /// 2 is seven numbers beginning with a 2, which is also exactly the shape of
     /// a tagged row without a point, and it parsed clean.
-    private static let format = -2
+    ///
+    /// Every version after 2 has the same width, so the tag is the only thing
+    /// separating them, and each was wrong in a way nothing downstream could
+    /// notice. 3 took its pose from a landmarks pass, which reports yaw as one
+    /// of three values and pitch and roll as flat zero — and zero radians reads
+    /// as a face pointing straight at the camera, not as a missing reading. 4
+    /// fixed the pose but seeded the landmarks from the rectangles pass, so
+    /// every landmark ratio was measured inside a different bounding box than
+    /// the one the app now uses. Both would load and quietly mis-place.
+    private static let format = -5
 
     /// Whether the dot has anywhere to go, which the debug overlay reports so a
     /// blank screen doesn't read as a broken tracker.
@@ -344,14 +396,14 @@ struct GazeProfile {
 
     init?(storage: [[Double]], noise: GazeSample? = nil) {
         guard !storage.isEmpty else { return nil }
-        let axes = GazeProfile.measured.count
+        let axes = GazeSample.axes.count
         var parsed: [GazeReference] = []
         for row in storage {
             guard row.first == Double(GazeProfile.format) else { return nil }
             let withPoint = 2 + axes + 2
             guard row.count == 2 + axes || row.count == withPoint else { return nil }
-            var sample = GazeSample(headX: 0, headY: 0, eyeX: 0, eyeY: 0, lidY: 0)
-            for (index, axis) in GazeProfile.measured.enumerated() {
+            var sample = GazeSample()
+            for (index, axis) in GazeSample.axes.enumerated() {
                 sample[keyPath: axis] = row[2 + index]
             }
             parsed.append(GazeReference(

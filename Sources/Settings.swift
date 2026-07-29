@@ -83,12 +83,15 @@ final class Settings {
     /// saved before it was measured, which fall back to the older scaling.
     var gazeNoise: GazeSample? {
         get {
-            guard let row = defaults.array(forKey: "gazeNoise") as? [Double], row.count == 5
+            guard let row = defaults.array(forKey: "gazeNoise") as? [Double],
+                  row.count == GazeSample.axes.count
             else { return nil }
-            return GazeSample(headX: row[0], headY: row[1], eyeX: row[2], eyeY: row[3], lidY: row[4])
+            var sample = GazeSample()
+            for (index, axis) in GazeSample.axes.enumerated() { sample[keyPath: axis] = row[index] }
+            return sample
         }
         set {
-            defaults.set(newValue.map { [$0.headX, $0.headY, $0.eyeX, $0.eyeY, $0.lidY] },
+            defaults.set(newValue.map { sample in GazeSample.axes.map { sample[keyPath: $0] } },
                          forKey: "gazeNoise")
         }
     }

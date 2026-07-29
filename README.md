@@ -44,20 +44,29 @@ It stays inert whenever the answer is the window you're already on, and whenever
 
 ### How well it picks
 
-Depends on how small the target is, and the honest answer is that it's measured rather than guessed. Replaying a real calibration through `tools/gaze_eval.py --placement` scores whether the dot lands in the right slot of a given layout:
+Depends on how small the target is, and the honest answer is that it's measured rather than guessed. Two calibrations recorded back to back, fitting on one and scoring on the other, replayed through `tools/gaze_eval.py --placement`. There are three outcomes rather than two, because a point that doesn't land clearly inside a window abstains instead of guessing, and only one of them costs you anything:
 
-| layout | display | slot size | column | row |
-|---|---|---|---|---|
-| halves | 3440x1440 | 1720x1440 | 96.9% | 100% |
-| thirds | 3440x1440 | 1147x1440 | 96.9% | 100% |
-| sixths | 3440x1440 | 1147x720 | 96.9% | 60.3% |
-| sixths | 1692x3008 | 564x1504 | 68.5% | 100% |
+| layout | display | slot size | acts right | acts wrong | does nothing |
+|---|---|---|---|---|---|
+| halves | 3440x1440 | 1720x1440 | 68.0% | 2.6% | 29.4% |
+| thirds | 3440x1440 | 1147x1440 | 61.4% | 5.7% | 32.9% |
+| sixths | 3440x1440 | 1147x720 | 48.4% | 9.8% | 41.8% |
+| halves | 1692x3008 | 846x3008 | 58.8% | 7.7% | 33.5% |
+| sixths | 1692x3008 | 564x1504 | 38.8% | 15.6% | 45.5% |
 
-So halves and thirds are comfortable, and sixths is not there yet. Which axis runs out first depends on the display rather than on the axis: the ultrawide fails on rows, the portrait one on columns, and both are just the axis whose slots got small. Since a slot only has to beat the *other windows actually open*, two or three windows on a screen is a much easier problem than a full six-way tiling, and that's the case it handles well today.
+So halves are comfortable, thirds are usable, and sixths is not there. The "does nothing" column is large by design: those are presses that fall back to normal focus behaviour, which is the failure you don't notice.
+
+Two things worth reading off that table. A slot only has to beat the *other windows actually open*, so two or three windows on a screen is a much easier problem than a full six-way tiling, and that's the case it handles well. And the portrait display is worse than the ultrawide at every size, which is about it sitting off to one side rather than about its shape.
+
+These numbers are deliberately pessimistic compared to what this section used to claim. Scoring a calibration against itself, even holding each dot out, flatters it: the same session, the same sitting position, the same lighting. Fitting one calibration and testing it against a different one is what actually happens when you calibrate on Monday and use it on Friday, and it costs several points everywhere.
 
 ### How it sees
 
-Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring. The pupils matter too, because a camera on one display can't see your head turn far enough to face a monitor off to the side; the eyes make up the angle the head didn't travel.
+Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line. The pupils matter too, because a camera on one display can't see your head turn far enough to face a monitor off to the side; the eyes make up the angle the head didn't travel.
+
+Vision will hand you a head pose directly, and it's recorded in every capture, but it isn't fitted against. It was tried properly, since a trained pose model ought to beat two landmark centroids divided by a third distance. Fitting one calibration and testing on another, every way of including it scored worse, and the reason is that it isn't new information: across the calibration dots Vision's yaw correlates with the nose ratio at r = 0.87. It buys a near-collinear column, which costs coefficient variance and returns no signal.
+
+Worth knowing if you go looking at that yourself: the pose is only computed properly by `VNDetectFaceRectanglesRequestRevision3`. A landmarks request reports yaw snapped to 45-degree buckets, roll to 30, and no pitch at all. Worse, `VNImageRequestHandler` caches its face detection, so performing both requests on one handler silently serves the first one's answer to the second, and every revision then agrees with every other because only one of them ran. That failure returns confident, plausible, wrong numbers rather than an error.
 
 Five measurements per frame: head yaw and pitch, pupil offset horizontally and vertically, and how open your eyelids are. The last one is there because vertical is the axis that costs accuracy, and it's a reading that owes nothing to finding the pupil: your lids narrow as you look down, measured across the whole eye contour rather than from a single point inside a region a third as tall as it is wide. Both pupil offsets are now scaled by eye *width* as well. Vertical used to divide by eye height, which moves with the thing being measured, since the box shrinks exactly when the pupil drops. Eye width is set by the corners, which don't move when you look anywhere.
 
@@ -81,11 +90,11 @@ Click the display you want. A click outranks gaze for a couple of seconds afterw
 
 **Show Gaze Dot** under Eye Tracking outlines the display a gesture would act on, outlines the window it would pick within it, and draws roughly where on it you're looking, with the distances and the margin ratio underneath. The caption says whether the window was chosen by the dot or fell back to frontmost. A window outline on the wrong window is the bug worth reporting.
 
-The dot is fitted separately from the display choice, and it has to be. The classifier scales each axis by how well it tells displays apart, which on a side-by-side desk puts vertical at about a quarter of horizontal, correctly, since vertical says nothing about which of two adjacent screens you're on. Drawing the dot through that same metric made it slide left and right while barely moving up or down: measured against held-out calibration dots, it covered 207px of vertical range where the real answer covered 788px. Placement instead takes each axis at face value and least-squares fits horizontal gaze from head yaw plus eye yaw, vertical from head pitch plus eye pitch, per display. That drops median error from 634x/653y px to 238x/387y px and tracks the full vertical range.
+The dot is fitted separately from the display choice, and it has to be. The classifier scales each axis by how well it tells displays apart, which on a side-by-side desk puts vertical at about a quarter of horizontal, correctly, since vertical says nothing about which of two adjacent screens you're on. Drawing the dot through that same metric made it slide left and right while barely moving up or down: it covered 207px of vertical range where the real answer covered 788px. Placement instead takes each axis at face value and least-squares fits horizontal gaze from head yaw plus eye yaw, vertical from head pitch plus eye pitch, per display. Median error across a held-out calibration is around 171px horizontally and 141px vertically, and it tracks the full vertical range.
 
-Where the calibration is big enough, each axis also picks up the other two as correction terms, since looking down does shift the horizontal reading a little. That needs the dots to pay for the parameters: at four per screen per pass, adding them helped one display and hurt the other, which is what overfitting looks like. Six per pass carries them, and a calibration recorded at four keeps the fit it was measured to be best at.
+Each axis also picks up the others as correction terms, since looking down does shift the horizontal reading a little. That needs the dots to pay for the parameters, which is the whole reason the grid is three by three: at four dots per screen per pass the corrections helped one display and hurt the other, which is what overfitting looks like.
 
-For scale, the resulting error is around 2.4° to 4.9° of visual angle, which is ordinary for a webcam without infrared illumination. Published appearance-based models land near 4° on the standard benchmark, and dedicated eye-tracking hardware gets under 1° by lighting your eyes with IR and watching the corneal reflection. So the dot's wobble is close to the method's floor rather than a calibration that needs redoing. It has 20x the margin it needs to pick between two displays, which is why the same recording classifies at 99.2%.
+For scale, that error is around 3 to 4 degrees of visual angle, which is ordinary for a webcam without infrared illumination. Published appearance-based models land near 4° on the standard benchmark, and dedicated eye-tracking hardware gets under 1° by lighting your eyes with IR and watching the corneal reflection. So the dot's wobble is close to the method's floor rather than a calibration that needs redoing. It has far more margin than it needs to pick between two displays, which is why the same recordings put 99% of frames on the right screen while only managing halves within one.
 
 ### Calibration
 
@@ -97,7 +106,9 @@ It goes round **twice**: once with your head facing straight ahead, moving only 
 
 In the first pass your head stays in **one** position for the whole thing, including when the dot crosses to another screen. Re-aiming it at each display makes the pass a second copy of the free one, and the eye-only extreme it exists to record never gets recorded. Reach as far as is comfortable rather than straining, since a reading taken at the limit of how far your eyes will go is one you'll never reproduce while actually working.
 
-A calibration recorded before this release won't load, and the menu says so rather than going quiet. `eyeY` changed what it's measured against, so an old profile would parse cleanly and then send windows to the wrong place.
+A calibration recorded before this release won't load, and the menu says so rather than going quiet. Every stored profile carries a format tag for this reason: several times now a change has altered what a recorded number means without altering its shape, and such a profile parses cleanly and then sends windows to the wrong place.
+
+Calibrating twice and keeping both is worth it if you're going to work on this. `tools/gaze_eval.py a.csv b.csv` fits on the first and scores against the second, which is the only way to tell a real improvement from a good sitting position.
 
 ### Working on the classifier
 

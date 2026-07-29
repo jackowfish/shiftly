@@ -160,12 +160,10 @@ final class GazeFocus {
     func reading() -> GazeSample? {
         let samples = GazeTracker.shared.recent(within: gazeDecisionWindow).suffix(gazeDecisionFrames)
         guard !samples.isEmpty else { return nil }
-        func median(_ axis: (GazeSample) -> Double) -> Double {
-            let sorted = samples.map(axis).sorted()
+        return GazeSample.perAxis { axis in
+            let sorted = samples.map { $0[keyPath: axis] }.sorted()
             return sorted[sorted.count / 2]
         }
-        return GazeSample(headX: median(\.headX), headY: median(\.headY),
-                          eyeX: median(\.eyeX), eyeY: median(\.eyeY), lidY: median(\.lidY))
     }
 
     /// Where on the desktop the estimate points, or nil when the calibration

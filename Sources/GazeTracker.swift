@@ -5,18 +5,12 @@ import Vision
 
 /// One frame of head and eye geometry, oriented like the desktop: +x right,
 /// +y down, from the viewer's point of view.
-///
-/// Head rotation comes from landmark ratios rather than `VNFaceObservation.yaw`
-/// and `.pitch`. Those are better conditioned, but their sign convention is
-/// undocumented and flips with mirroring, and a tracker that snaps windows to
-/// the wrong side of the desk is worse than one that's slightly less linear.
-/// Nose-relative-to-eye-line has a sign we can derive from first principles.
 struct GazeSample {
     /// Nose offset from the eye midpoint, in inter-ocular widths. Tracks yaw.
-    var headX: Double
+    var headX = 0.0
     /// Nose drop below the eye line, in inter-ocular widths. Tracks pitch, but
     /// carries a per-face baseline, so only changes in it mean anything.
-    var headY: Double
+    var headY = 0.0
     /// Pupil displacement from the eye centre, in half eye-widths, about -1...1.
     ///
     /// Both axes divide by the eye's *width*. Vertical used to divide by the
@@ -25,8 +19,8 @@ struct GazeSample {
     /// when the pupil drops, and the ratio flattens out the signal while
     /// amplifying the noise in it. Eye width is set by the inner and outer
     /// corners, which don't move when you look anywhere.
-    var eyeX: Double
-    var eyeY: Double
+    var eyeX = 0.0
+    var eyeY = 0.0
     /// How open the lids are, as eye height over inter-ocular distance.
     ///
     /// A vertical signal that owes nothing to finding the pupil. Looking down
@@ -35,7 +29,54 @@ struct GazeSample {
     /// inside a region a third as tall as it is wide. Vertical is the axis that
     /// costs us window-level accuracy, and this is a second, independent
     /// measurement of it.
-    var lidY: Double
+    var lidY = 0.0
+
+    /// Head rotation as Vision reports it, in radians.
+    ///
+    /// These were left out for a long time on the grounds that the sign
+    /// convention is undocumented and flips with mirroring. That objection
+    /// doesn't survive contact with how the profile is actually built: nothing
+    /// reads an axis in absolute terms, every use compares a reading against
+    /// labelled readings or against a fit solved from them, and a coefficient
+    /// solved from calibration absorbs an inverted sign without noticing.
+    ///
+    /// What they buy is conditioning. `headX` and `headY` are two landmark
+    /// centroids divided by a third distance, a crude estimator of the same
+    /// rotation, and the head term is the part of the placement fit that
+    /// measurably runs out first: decomposing the error, the axes that cap
+    /// window accuracy are model-limited rather than noise-limited. These come
+    /// from a trained pose model instead. Kept alongside the ratios rather than
+    /// replacing them, because the two fail differently and the fit can use
+    /// whichever it likes.
+    ///
+    /// `faceRoll` is head tilt, which points nowhere on its own. It's a
+    /// correction term: tilting rotates the eye-corner frame `eyeX` and `eyeY`
+    /// are measured in, so some of their error is a roll they can't see.
+    ///
+    /// Only ever populated by a revision 3 rectangles pass. See the note in
+    /// `captureOutput` — getting this wrong yields plausible numbers rather
+    /// than none.
+    var faceYaw = 0.0
+    var facePitch = 0.0
+    var faceRoll = 0.0
+
+    /// Every axis a reading carries, in the order they're stored and captured.
+    ///
+    /// Enumerated once here rather than spelled out at each of the eight places
+    /// a sample gets averaged, differenced, serialised or written to CSV. Adding
+    /// an axis used to mean finding all of them.
+    static let axes: [WritableKeyPath<GazeSample, Double>] =
+        [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY, \.faceYaw, \.facePitch, \.faceRoll]
+
+    static let names = ["headX", "headY", "eyeX", "eyeY", "lidY", "faceYaw", "facePitch", "faceRoll"]
+
+    /// A sample built by working out each axis independently, which is the
+    /// shape of every mean, median and spread taken over a set of readings.
+    static func perAxis(_ value: (WritableKeyPath<GazeSample, Double>) -> Double) -> GazeSample {
+        var out = GazeSample()
+        for axis in axes { out[keyPath: axis] = value(axis) }
+        return out
+    }
 }
 
 /// Front camera plus Vision face landmarks, on device. Runs only while
@@ -65,6 +106,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "com.jackdecker.shiftly.gaze")
     private let request = VNDetectFaceLandmarksRequest()
+    private let rectangles = VNDetectFaceRectanglesRequest()
     private var configured = false
     private var mirrored = false
     private var lingerTimer: Timer?
@@ -73,6 +115,10 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         super.init()
         // Revision 3 is the 76-point constellation, the one with pupils.
         request.revision = VNDetectFaceLandmarksRequestRevision3
+        // Revision 3 is also the only one that computes pitch at all, and the
+        // only one that reports any of the three angles continuously rather
+        // than snapped to 45° buckets.
+        rectangles.revision = VNDetectFaceRectanglesRequestRevision3
     }
 
     // MARK: Lifecycle
@@ -211,13 +257,45 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
                        from connection: AVCaptureConnection) {
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        // Two passes, on two handlers, and both details matter.
+        //
+        // A landmarks request runs its own face detector, and that detector
+        // reports yaw snapped to 45° buckets, roll to 30°, and no pitch at all.
+        // Only VNDetectFaceRectanglesRequestRevision3 computes the angles
+        // properly, so the pose has to come from a rectangles pass.
+        //
+        // They can't share a handler. VNImageRequestHandler caches its face
+        // detection, so a second face request on the same handler is served the
+        // first one's answer regardless of the revision it asked for. That
+        // failure is silent and returns confident, plausible, wrong numbers: it
+        // read as "Vision cannot do this on this camera" for a while, with
+        // revisions 1, 2 and 3 agreeing precisely because none of them ran.
+        //
+        // The landmarks pass keeps its own detector rather than being seeded
+        // from the rectangles result, even though seeding is cheaper: it skips
+        // detection for 2.6ms against 7.8ms, and the observation it returns
+        // carries the pose through as well as the landmarks, so one face object
+        // would have everything.
+        //
+        // The catch is that landmarks are then fitted inside the rectangles
+        // detector's bounding box instead of their own, and every axis here is
+        // a ratio of landmark positions. Measured over a calibration, seeding
+        // raised per-frame jitter on all five: headX by 27%, the rest by about
+        // 10%. Paying 5ms to leave the axes that already work exactly as they
+        // were is the easy side of that trade, and it keeps the pose a pure
+        // addition rather than a change to everything at once.
+        let poseHandler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:])
+        try? poseHandler.perform([rectangles])
+        let pose = rectangles.results?.first
+
         let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:])
         do {
             try handler.perform([request])
         } catch {
             return
         }
-        guard let face = request.results?.first, let sample = derive(from: face) else { return }
+        guard let face = request.results?.first,
+              let sample = derive(from: face, pose: pose) else { return }
 
         DispatchQueue.main.async {
             let now = ProcessInfo.processInfo.systemUptime
@@ -232,7 +310,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
 
     /// Landmark points are normalized to the face's bounding box, so every
     /// ratio below is scale invariant, and Vision's y axis points up.
-    private func derive(from face: VNFaceObservation) -> GazeSample? {
+    private func derive(from face: VNFaceObservation, pose: VNFaceObservation?) -> GazeSample? {
         guard let landmarks = face.landmarks,
               let leftEye = landmarks.leftEye,
               let rightEye = landmarks.rightEye,
@@ -281,7 +359,16 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         }
         if lidCount > 0 { lidY /= lidCount }
 
-        return GazeSample(headX: headX, headY: headY, eyeX: eyeX, eyeY: eyeY, lidY: lidY)
+        var sample = GazeSample(headX: headX, headY: headY, eyeX: eyeX, eyeY: eyeY, lidY: lidY)
+        // Flipped to match the desktop convention the rest of the sample uses,
+        // so the debug trace reads sensibly. Nothing downstream depends on it:
+        // every coefficient these feed is solved from calibration, which
+        // absorbs a sign. A missing angle stays 0, and a constant axis is
+        // dropped from the fit rather than making it singular.
+        sample.faceYaw = flip * (pose?.yaw?.doubleValue ?? 0)
+        sample.facePitch = pose?.pitch?.doubleValue ?? 0
+        sample.faceRoll = flip * (pose?.roll?.doubleValue ?? 0)
+        return sample
     }
 
     private func centroid(_ region: VNFaceLandmarkRegion2D) -> CGPoint {

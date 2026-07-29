@@ -13,7 +13,11 @@ swiftc -O "$ROOT"/Sources/*.swift \
 	-o "$APP/Contents/MacOS/Shiftly" \
 	-framework AppKit \
 	-framework Carbon \
-	-framework ApplicationServices
+	-framework ApplicationServices \
+	-framework AVFoundation \
+	-framework CoreMedia \
+	-framework CoreVideo \
+	-framework Vision
 
 # Sign with a stable identity so the Accessibility grant survives rebuilds
 # (ad-hoc signing changes the app's identity every build, and TCC keys grants

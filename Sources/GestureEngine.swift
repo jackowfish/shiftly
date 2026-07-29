@@ -31,6 +31,10 @@ final class GestureEngine {
     private var slot: Int?
     private var sixth = 0
 
+    /// The gaze layer checks this so the two input paths can't both drive the
+    /// same window at once.
+    var isActive: Bool { active }
+
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
 

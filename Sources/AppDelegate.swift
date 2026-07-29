@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log("launched, accessibility trusted: \(trusted)")
 
         installHotKeys()
+        GazeSession.shared.refresh()
     }
 
     /// Squircle shift keycap, template-tinted for the menu bar.
@@ -107,6 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         animationItem.submenu = animationMenu
 
+        let gazeItem = menu.addItem(withTitle: "Eye Tracking", action: nil, keyEquivalent: "")
+        gazeItem.submenu = buildGazeMenu()
+
         menu.addItem(.separator())
         let loginItem = menu.addItem(withTitle: "Start at Login",
                                      action: #selector(toggleLoginItem),
@@ -129,6 +133,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    private func buildGazeMenu() -> NSMenu {
+        let settings = Settings.shared
+        let menu = NSMenu()
+        // Hand-managed so the flip items can stay greyed out once a calibration
+        // supersedes them.
+        menu.autoenablesItems = false
+
+        let enableItem = menu.addItem(withTitle: "Enable Eye Tracking",
+                                      action: #selector(toggleGaze),
+                                      keyEquivalent: "")
+        enableItem.target = self
+        enableItem.state = settings.gazeEnabled ? .on : .off
+
+        menu.addItem(.separator())
+        let explainer = settings.gazeEnabled
+            ? "Hold \(gazeChordTitle()), look at a zone, release to place"
+            : "Off"
+        menu.addItem(withTitle: explainer, action: nil, keyEquivalent: "").isEnabled = false
+
+        let status: String
+        if !settings.isGazeCalibrated {
+            status = "Not calibrated (using rough defaults)"
+        } else if settings.gazeCalibrationArrangement != screenArrangementFingerprint() {
+            status = "Calibrated for a different display layout"
+        } else {
+            status = "Calibrated"
+        }
+        menu.addItem(withTitle: status, action: nil, keyEquivalent: "").isEnabled = false
+
+        let calibrateItem = menu.addItem(withTitle: "Calibrate…",
+                                         action: #selector(calibrateGaze),
+                                         keyEquivalent: "")
+        calibrateItem.target = self
+        if settings.isGazeCalibrated {
+            let resetItem = menu.addItem(withTitle: "Reset Calibration",
+                                         action: #selector(resetGazeCalibration),
+                                         keyEquivalent: "")
+            resetItem.target = self
+        }
+
+        menu.addItem(.separator())
+        let chordItem = menu.addItem(withTitle: "Chord", action: nil, keyEquivalent: "")
+        let chordMenu = NSMenu()
+        for choice in gazeModifierChoices {
+            let item = chordMenu.addItem(withTitle: choice.title,
+                                         action: #selector(pickGazeModifier(_:)),
+                                         keyEquivalent: "")
+            item.target = self
+            item.state = choice.mods == settings.gazeModifiers ? .on : .off
+            item.representedObject = Int(choice.mods)
+        }
+        chordItem.submenu = chordMenu
+
+        let gridItem = menu.addItem(withTitle: "Zones", action: nil, keyEquivalent: "")
+        let gridMenu = NSMenu()
+        for choice in gazeGridChoices {
+            let item = gridMenu.addItem(withTitle: choice.title,
+                                        action: #selector(pickGazeGrid(_:)),
+                                        keyEquivalent: "")
+            item.target = self
+            item.state = choice.columns == settings.gazeColumns && choice.rows == settings.gazeRows ? .on : .off
+            item.representedObject = [choice.columns, choice.rows]
+        }
+        gridItem.submenu = gridMenu
+
+        menu.addItem(.separator())
+        // Calibration works out the signs by itself, so these are only live
+        // while running on the guessed defaults.
+        let calibrated = settings.isGazeCalibrated
+        let flipXItem = menu.addItem(withTitle: calibrated ? "Flip Horizontal (set by calibration)" : "Flip Horizontal",
+                                     action: #selector(toggleGazeFlipX),
+                                     keyEquivalent: "")
+        flipXItem.target = self
+        flipXItem.state = !calibrated && settings.gazeInvertX ? .on : .off
+        flipXItem.isEnabled = !calibrated
+
+        let flipYItem = menu.addItem(withTitle: calibrated ? "Flip Vertical (set by calibration)" : "Flip Vertical",
+                                     action: #selector(toggleGazeFlipY),
+                                     keyEquivalent: "")
+        flipYItem.target = self
+        flipYItem.state = !calibrated && settings.gazeInvertY ? .on : .off
+        flipYItem.isEnabled = !calibrated
+
+        let warmItem = menu.addItem(withTitle: "Keep Camera Warm (faster, light stays on)",
+                                    action: #selector(toggleGazeWarmCamera),
+                                    keyEquivalent: "")
+        warmItem.target = self
+        warmItem.state = settings.gazeKeepCameraWarm ? .on : .off
+
+        return menu
+    }
+
+    private func gazeChordTitle() -> String {
+        let mods = Settings.shared.gazeModifiers
+        return gazeModifierChoices.first { $0.mods == mods }?.title ?? "the chord"
+    }
+
     private func refreshMenu() {
         statusItem?.menu = buildMenu()
     }
@@ -147,9 +248,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Settings.shared.setModifiers(previous, for: other)
         }
         Settings.shared.setModifiers(chosen, for: layer)
+        moveGazeChordOff(chosen)
 
         installHotKeys()
+        GazeSession.shared.refresh()
         refreshMenu()
+    }
+
+    // MARK: Gaze
+
+    /// The gaze chord arms on the modifiers alone, so sharing a combo with a
+    /// layer would arm it every time that layer is used. Push it somewhere free.
+    private func moveGazeChordOff(_ chord: UInt32) {
+        guard Settings.shared.gazeModifiers == chord else { return }
+        let taken = Layer.allCases.map { Settings.shared.modifiers(for: $0) }
+        if let free = gazeModifierChoices.first(where: { !taken.contains($0.mods) }) {
+            Settings.shared.gazeModifiers = free.mods
+        }
+    }
+
+    private func moveLayersOff(_ chord: UInt32) {
+        for layer in Layer.allCases where Settings.shared.modifiers(for: layer) == chord {
+            let taken = Layer.allCases.filter { $0 != layer }.map { Settings.shared.modifiers(for: $0) }
+            if let free = modifierChoices.first(where: { $0.mods != chord && !taken.contains($0.mods) }) {
+                Settings.shared.setModifiers(free.mods, for: layer)
+            }
+        }
+    }
+
+    @objc private func toggleGaze() {
+        if Settings.shared.gazeEnabled {
+            Settings.shared.gazeEnabled = false
+            GazeSession.shared.refresh()
+            refreshMenu()
+            return
+        }
+
+        GazeTracker.requestAccess { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.showCameraDeniedAlert()
+                return
+            }
+            Settings.shared.gazeEnabled = true
+            self.moveGazeChordOff(Settings.shared.gazeModifiers)
+            GazeSession.shared.refresh()
+            self.refreshMenu()
+            if !Settings.shared.isGazeCalibrated { self.offerCalibration() }
+        }
+    }
+
+    @objc private func pickGazeModifier(_ sender: NSMenuItem) {
+        guard let mods = sender.representedObject as? Int else { return }
+        let chosen = UInt32(mods)
+        Settings.shared.gazeModifiers = chosen
+        moveLayersOff(chosen)
+        installHotKeys()
+        GazeSession.shared.refresh()
+        refreshMenu()
+    }
+
+    @objc private func pickGazeGrid(_ sender: NSMenuItem) {
+        guard let grid = sender.representedObject as? [Int], grid.count == 2 else { return }
+        Settings.shared.gazeColumns = grid[0]
+        Settings.shared.gazeRows = grid[1]
+        refreshMenu()
+    }
+
+    @objc private func toggleGazeFlipX() {
+        Settings.shared.gazeInvertX.toggle()
+        refreshMenu()
+    }
+
+    @objc private func toggleGazeFlipY() {
+        Settings.shared.gazeInvertY.toggle()
+        refreshMenu()
+    }
+
+    @objc private func toggleGazeWarmCamera() {
+        Settings.shared.gazeKeepCameraWarm.toggle()
+        GazeSession.shared.refresh()
+        refreshMenu()
+    }
+
+    @objc private func resetGazeCalibration() {
+        Settings.shared.clearGazeCalibration()
+        refreshMenu()
+    }
+
+    @objc private func calibrateGaze() {
+        GazeTracker.requestAccess { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.showCameraDeniedAlert()
+                return
+            }
+            GazeCalibrator.shared.start { _ in self.refreshMenu() }
+        }
+    }
+
+    private func offerCalibration() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Calibrate eye tracking?"
+        alert.informativeText = """
+            Uncalibrated, Shiftly guesses at how far you turn your head, so it \
+            will pick the right display but often the wrong zone on it. \
+            Calibration walks a dot around each screen and takes about \
+            \(Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count) * (gazeCalibrationSettle + gazeCalibrationCollect))) seconds.
+            """
+        alert.addButton(withTitle: "Calibrate")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            GazeCalibrator.shared.start { _ in self.refreshMenu() }
+        }
+    }
+
+    private func showCameraDeniedAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Shiftly needs camera access"
+        alert.informativeText = "Eye tracking reads head and eye position on device. "
+            + "Grant camera access in Privacy & Security, then enable it again."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func pickAnimation(_ sender: NSMenuItem) {

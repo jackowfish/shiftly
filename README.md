@@ -146,7 +146,9 @@ Grant Accessibility when prompted (System Settings, Privacy & Security, Accessib
 
 The build signs with a `Shiftly Dev Signing` certificate if one exists in your keychain, and falls back to ad-hoc signing otherwise.
 
-There's no Xcode project or Package.swift. `build.sh` calls `swiftc` over the sources directly, which means editors will report unresolved symbols when they analyse a file on its own; the build is the thing to trust.
+`build.sh` is what produces the app: SwiftPM can't assemble a `.app`, since that needs the Info.plist, the icon, the entitlements and a signature.
+
+There's a `Package.swift` anyway, purely so editors resolve the module. Without it SourceKit analyses each file alone and reports every cross-file symbol as missing, which buries real diagnostics under hundreds of fake ones. `swift build` type-checks everything and gives you a bare binary; it just isn't the shippable artifact.
 
 ## Layout
 
@@ -155,6 +157,8 @@ Sources/App/        menu bar app, settings, updater
 Sources/Snapping/   hotkeys, the gesture ladders, geometry, the overlay
 Sources/Gaze/       camera, calibration, the profile, window targeting
 tools/              gaze_eval.py and the calibration screenshot renderer
+build.sh            assembles and signs the .app
+Package.swift       for editors and `swift build`, not for shipping
 ```
 
 ## Settings

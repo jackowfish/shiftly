@@ -38,11 +38,6 @@ HEAD_X, HEAD_Y, EYE_X, EYE_Y, LID_Y = range(len(AXES))
 HORIZONTAL = [HEAD_X, EYE_X]
 VERTICAL = [HEAD_Y, EYE_Y, LID_Y]
 
-# Readings per display before the placement fit takes on the cross-axis terms.
-# Matches gazePlacementCoupledDots in Model.swift.
-COUPLED_DOTS = 10
-
-
 def version(path):
     """Capture format from the header. 1 has no lidY and scales eyeY differently."""
     with open(path) as handle:
@@ -240,6 +235,24 @@ def fit_ls(features, values):
     return [m[i][terms] for i in range(terms)]
 
 
+def evaluate(term, x):
+    """One placement term: an axis, or two multiplied together."""
+    first, second = term
+    return x[first] if second is None else x[first] * x[second]
+
+
+def shapes(own, cross, drop=()):
+    """Term sets to try for one axis, matching GazeProfile.placement.
+
+    Every axis linearly, then the carrying axes alone as the fallback for a
+    calibration too small to support the corrections. Second-order terms were
+    measured and rejected; see the note on GazeProfile.terms.
+    """
+    own = [a for a in own if a not in drop]
+    cross = [a for a in cross if a not in drop]
+    return [[(a, None) for a in own + cross], [(a, None) for a in own]]
+
+
 def coverage(rows_):
     return {(r["display"], r["style"]) for r in rows_}
 
@@ -263,6 +276,10 @@ def arrangement(path):
 # demanding one: on a 3440x1440 ultrawide its tiles are 1147x720.
 LAYOUTS = [("halves", 2, 1), ("thirds", 3, 1), ("quarters", 2, 2), ("sixths", 3, 2)]
 
+# Matches gazeWindowInset in Model.swift: how far inside a window the estimate
+# has to land before that window counts as the one you meant.
+GAZE_WINDOW_INSET = 80.0
+
 
 def tile_of(point, rect, cols, rows):
     x, y, w, h = rect
@@ -272,39 +289,97 @@ def tile_of(point, rect, cols, rows):
 
 
 def tile_report(plan, predict, frames):
-    """Whether the dot lands in the right tile, which is what window picking needs.
+    """Whether the dot would pick the right window slot, from the error spread.
 
-    Reported per axis as well as combined, because they fail for different
-    reasons and at different rates: the horizontal fit has a whole ultrawide to
-    spread its error over, while the vertical one is measuring pupil position
-    inside an eye opening a third as tall as it is wide.
+    Scored from the residuals rather than by asking which tile each calibration
+    dot fell in. That direct version is contaminated by where the dots happen to
+    sit: a 3x3 grid puts a third of them exactly on the boundary of a 2-wide
+    layout, where any error at all is a coin flip, and it scored halves below
+    thirds as a result. Which says something about the grid, nothing about the
+    tracker.
+
+    Two numbers, because "will it pick the right window" depends on where in the
+    window you're looking. `centre` is looking at the middle of a slot, the best
+    case and roughly what you do with a window you're reading. `anywhere` is a
+    target uniformly placed in the slot, which counts looking near its edge as
+    the miss it usually is. For a uniform offset the hit rate works out to
+    mean(max(0, 1 - |error| / slot)), no sampling needed.
     """
     if not frames:
         return
-    print("\ntile hit rate — would the dot pick the right window slot")
-    print(f"{'layout':<10} {'display':>8} {'tile px':>12} {'column':>8} {'row':>8} {'both':>8}")
+    residuals = {}
+    for fitted, chunk in plan:
+        for row in chunk:
+            predicted = predict(fitted, row["display"], row["x"])
+            if predicted is None:
+                continue
+            residuals.setdefault(row["display"], ([], []))
+            residuals[row["display"]][0].append(predicted[0] - row["point"][0])
+            residuals[row["display"]][1].append(predicted[1] - row["point"][1])
+    if not residuals:
+        return
+
+    def centre(errors, size):
+        return sum(abs(e) < size / 2 for e in errors) / len(errors)
+
+    def simulate(ex, ey, full_w, full_h, cols, rows_, steps=28):
+        """Run the shipped rule over targets placed all over the display.
+
+        The app only acts when the estimate lands properly inside a window, so a
+        near-miss abstains instead of guessing. That makes three outcomes, not
+        two, and only one of them costs anything: doing nothing leaves the
+        gesture on the window you already had, while acting on the wrong window
+        moves something you didn't mean to move.
+
+        Targets span the whole display rather than one slot, so that an estimate
+        drifting off the outside edge counts as nothing to act on, which is what
+        it is. Scoring it against a slot in isolation invents a neighbouring
+        window past the edge of the screen and blames the tracker for picking it.
+        """
+        w, h = full_w / cols, full_h / rows_
+
+        def landed(position, size, count):
+            index = math.floor(position / size)
+            if index < 0 or index >= count:
+                return None
+            offset = position - index * size
+            edge = min(GAZE_WINDOW_INSET, size * 0.2)
+            return index if edge <= offset <= size - edge else None
+
+        right = wrong = total = 0
+        for dx, dy in zip(ex, ey):
+            for i in range(steps):
+                true_x = (i + 0.5) / steps * full_w
+                got_x = landed(true_x + dx, w, cols)
+                want_x = min(int(true_x / w), cols - 1)
+                for j in range(steps):
+                    true_y = (j + 0.5) / steps * full_h
+                    total += 1
+                    if got_x is None:
+                        continue
+                    got_y = landed(true_y + dy, h, rows_)
+                    if got_y is None:
+                        continue
+                    if got_x == want_x and got_y == min(int(true_y / h), rows_ - 1):
+                        right += 1
+                    else:
+                        wrong += 1
+        return right / total, wrong / total
+
+    print("\nwindow slot outcomes, from the held-out error spread")
+    print(f"{'layout':<10} {'display':>8} {'slot px':>12} {'centre':>8}"
+          f"   {'acts right':>10} {'acts wrong':>10} {'does nothing':>13}")
     for name, cols, rows_ in LAYOUTS:
         for display in sorted(frames):
-            got_col = got_row = both = total = 0
-            for fitted, chunk in plan:
-                for row in chunk:
-                    if row["display"] != display:
-                        continue
-                    predicted = predict(fitted, row["display"], row["x"])
-                    if predicted is None:
-                        continue
-                    want = tile_of(row["point"], frames[display], cols, rows_)
-                    have = tile_of(predicted, frames[display], cols, rows_)
-                    got_col += have[0] == want[0]
-                    got_row += have[1] == want[1]
-                    both += have == want
-                    total += 1
-            if not total:
+            if display not in residuals:
                 continue
-            _, _, w, h = frames[display]
-            size = f"{w / cols:.0f}x{h / rows_:.0f}"
-            print(f"{name:<10} {display:>8} {size:>12} {got_col / total:>7.1%} "
-                  f"{got_row / total:>7.1%} {both / total:>7.1%}")
+            ex, ey = residuals[display]
+            _, _, full_w, full_h = frames[display]
+            w, h = full_w / cols, full_h / rows_
+            right, wrong = simulate(ex, ey, full_w, full_h, cols, rows_)
+            print(f"{name:<10} {display:>8} {f'{w:.0f}x{h:.0f}':>12} "
+                  f"{centre(ex, w) * centre(ey, h):>7.1%}   {right:>9.1%} "
+                  f"{wrong:>10.1%} {1 - right - wrong:>12.1%}")
 
 
 def placement_report(train_rows, test_rows, weights, frames):
@@ -334,22 +409,21 @@ def placement_report(train_rows, test_rows, weights, frames):
             idw_refs.setdefault(display, []).append((x, point))
         no_lid = {}
         for display, pts in idw_refs.items():
-            # Own axis first, then the cross terms once there are dots enough to
-            # tell a real correction from noise. Same order and gate as the app.
-            coupled = len(pts) >= COUPLED_DOTS
-
             def solve(own, cross, index, drop=()):
-                axes = [a for a in (own + cross if coupled else own) if a not in drop]
-                got = fit_ls([[x[i] for i in axes] for x, _ in pts],
-                             [p[index] for _, p in pts])
-                return (axes, got) if got else None
+                """Fit one axis, matching GazeProfile.placement."""
+                for terms in shapes(own, cross, drop):
+                    got = fit_ls([[evaluate(t, x) for t in terms] for x, _ in pts],
+                                 [p[index] for _, p in pts])
+                    if got:
+                        return terms, got
+                return None
 
             full = (solve(HORIZONTAL, VERTICAL, 0), solve(VERTICAL, HORIZONTAL, 1))
             if all(full):
                 linear[display] = full
-            # The same fit with the eyelid term removed, so the placement table
-            # can say whether it earned its parameter on the axis it was added
-            # for rather than only whether the whole thing got better.
+            # The same selection with the eyelid term removed, so the placement
+            # table can say whether it earned its parameter on the axis it was
+            # added for rather than only whether the whole thing got better.
             bare = (solve(HORIZONTAL, VERTICAL, 0, drop=(LID_Y,)),
                     solve(VERTICAL, HORIZONTAL, 1, drop=(LID_Y,)))
             if all(bare):
@@ -371,9 +445,9 @@ def placement_report(train_rows, test_rows, weights, frames):
         def go(fitted, display, x):
             if display not in fitted[slot]:
                 return None
-            def apply(axes, c):
-                return c[0] + sum(c[i + 1] * x[axis] for i, axis in enumerate(axes))
-            return tuple(apply(axes, c) for axes, c in fitted[slot][display])
+            def apply(terms, c):
+                return c[0] + sum(c[i + 1] * evaluate(t, x) for i, t in enumerate(terms))
+            return tuple(apply(terms, c) for terms, c in fitted[slot][display])
         return go
 
     lin = predict_with(1)
@@ -425,9 +499,15 @@ def main():
     parser.add_argument("files", nargs="*")
     parser.add_argument("--margin", type=float, default=0.85)
     parser.add_argument("--frames", type=int, default=3)
+    parser.add_argument("--inset", type=float, default=None,
+                        help="override gazeWindowInset when scoring window slots")
     parser.add_argument("--placement", action="store_true",
                         help="score where the debug dot lands instead of only which display")
     args = parser.parse_args()
+
+    if args.inset is not None:
+        global GAZE_WINDOW_INSET
+        GAZE_WINDOW_INSET = args.inset
 
     files = args.files or sorted(glob.glob(os.path.join(CAPTURES, "*.csv")))
     if not files:

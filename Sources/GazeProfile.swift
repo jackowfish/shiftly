@@ -108,33 +108,57 @@ struct GazeProfile {
 
     // MARK: Placement
 
-    /// One axis of the dot, as a weight on each measured axis plus an offset.
-    /// The cross-axis weights stay zero when the calibration was too small to
-    /// fit them.
-    struct Placement {
-        var constant = 0.0
-        var headX = 0.0
-        var eyeX = 0.0
-        var headY = 0.0
-        var eyeY = 0.0
-        var lidY = 0.0
+    /// One term of a placement fit: an axis, optionally multiplied by a second
+    /// one, which covers both the linear and the squared and product terms.
+    struct Term {
+        let first: Int
+        let second: Int?
 
-        func callAsFunction(_ sample: GazeSample) -> Double {
-            constant + headX * sample.headX + eyeX * sample.eyeX
-                + headY * sample.headY + eyeY * sample.eyeY + lidY * sample.lidY
+        func value(_ sample: GazeSample, _ axes: [KeyPath<GazeSample, Double>]) -> Double {
+            let a = sample[keyPath: axes[first]]
+            guard let second else { return a }
+            return a * sample[keyPath: axes[second]]
         }
     }
 
-    /// The measured axes and the Placement weights they pair with, in one fixed
-    /// order so a solved coefficient vector reads back into a Placement.
-    /// Grouped horizontal first, then vertical, so each axis of the dot takes a
-    /// contiguous slice as the terms that carry it.
+    /// One axis of the dot: a constant plus a weighted sum of terms.
+    struct Placement {
+        var constant = 0.0
+        var terms: [(term: Term, weight: Double)] = []
+
+        func callAsFunction(_ sample: GazeSample) -> Double {
+            terms.reduce(constant) { $0 + $1.weight * $1.term.value(sample, GazeProfile.axes) }
+        }
+    }
+
+    /// The measured axes in one fixed order, so a solved coefficient vector
+    /// reads back onto the right terms. Grouped horizontal first, then vertical,
+    /// so each axis of the dot takes a contiguous slice as the terms that carry
+    /// it directly.
     private static let axes: [KeyPath<GazeSample, Double>] =
-        [\.headX, \.eyeX, \.headY, \.eyeY, \.lidY]
-    private static let slots: [WritableKeyPath<Placement, Double>] =
         [\.headX, \.eyeX, \.headY, \.eyeY, \.lidY]
     private static let horizontal = [0, 1]
     private static let vertical = [2, 3, 4]
+
+    /// Terms for one axis of one display: every measured axis, linearly, with
+    /// the ones that carry this direction first.
+    ///
+    /// Second-order terms are the standard mapping in the eye tracking
+    /// literature and they were tried properly here. Fixed and measured against
+    /// held-out dots they win on exactly one axis of one display, taking the
+    /// ultrawide's vertical fit from 184px to 136px, while pushing its
+    /// horizontal from 66px to 86px and making both axes of a portrait display
+    /// worse. Choosing per axis from the calibration then scored worse than
+    /// linear everywhere, 203px horizontal against 144px: at eighteen dots the
+    /// gap between the two shapes sits inside the noise, so the choice comes out
+    /// close to a coin flip, and the polynomial extrapolates badly when it loses.
+    ///
+    /// A shape that wins a quarter of the time and can't be identified when is
+    /// worth less than the one that never blows up. `Term` stays general so the
+    /// next attempt is a change here rather than a rewrite.
+    private static func terms(own: [Int], cross: [Int]) -> [Term] {
+        (own + cross).map { Term(first: $0, second: nil) }
+    }
 
     /// Least squares for `value ≈ c + Σ coefficient · feature`, or nil when the
     /// readings can't pin the coefficients down — a calibration where every dot
@@ -174,24 +198,23 @@ struct GazeProfile {
     }
 
     /// One axis of one display's dot. `own` are the axes that carry it directly,
-    /// `cross` the ones that only correct it, dropped when the dots are too few
-    /// to tell a real correction from noise.
+    /// `cross` the ones that only correct it.
     private static func placement(_ group: [GazeReference],
                                   own: [Int],
                                   cross: [Int],
                                   value: (CGPoint) -> CGFloat) -> Placement? {
-        let used = group.count >= gazePlacementCoupledDots ? own + cross : own
-        let features = group.map { reference in
-            used.map { reference.sample[keyPath: axes[$0]] }
+        var chosen = terms(own: own, cross: cross)
+        // Fall back to the carrying axes alone when a small calibration can't
+        // support the corrections, so a short profile still places a dot.
+        var features = group.map { reference in chosen.map { $0.value(reference.sample, axes) } }
+        let values = group.map { Double(value($0.point!)) }
+        if solve(features: features, values: values) == nil {
+            chosen = own.map { Term(first: $0, second: nil) }
+            features = group.map { reference in chosen.map { $0.value(reference.sample, axes) } }
         }
-        guard let solved = solve(features: features, values: group.map { Double(value($0.point!)) })
-        else { return nil }
-
-        var out = Placement(constant: solved[0])
-        for (axis, coefficient) in zip(used, solved.dropFirst()) {
-            out[keyPath: slots[axis]] = coefficient
-        }
-        return out
+        guard let solved = solve(features: features, values: values) else { return nil }
+        return Placement(constant: solved[0],
+                         terms: Array(zip(chosen, solved.dropFirst()).map { (term: $0, weight: $1) }))
     }
 
     private static func fitPlacements(
@@ -300,6 +323,13 @@ struct GazeProfile {
     /// Whether the dot has anywhere to go, which the debug overlay reports so a
     /// blank screen doesn't read as a broken tracker.
     var hasPoints: Bool { !placements.isEmpty }
+
+    /// How many terms each display's fit ended up with, for the debug trace.
+    var placementSummary: String {
+        placements.sorted { $0.key < $1.key }
+            .map { "\($0.key) x:\($0.value.x.terms.count) y:\($0.value.y.terms.count) terms" }
+            .joined(separator: "  ")
+    }
 
     init(references: [GazeReference], noise: GazeSample? = nil) {
         self.references = references

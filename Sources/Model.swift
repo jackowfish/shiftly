@@ -205,11 +205,6 @@ let gazeCalibrationTargets: [CGPoint] = [
     CGPoint(x: 0.12, y: 0.86), CGPoint(x: 0.50, y: 0.86), CGPoint(x: 0.88, y: 0.86),
 ]
 
-/// Readings a display needs before the dot's placement fit takes on the
-/// cross-axis terms. Below it the fit stays on its own axis, so a calibration
-/// recorded at four dots per pass keeps the shape it was measured to be best at.
-let gazePlacementCoupledDots = 10
-
 /// Shortened alongside the move to nine dots, so more of the budget goes on
 /// covering the screen and less on waiting at each spot. A saccade lands and
 /// settles well inside 0.7s, and 0.6s of collection is still eighteen frames to

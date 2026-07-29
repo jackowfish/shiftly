@@ -81,6 +81,7 @@ final class GazeFocus {
         }
         if let profile = Settings.shared.gazeProfile {
             debugLog("gaze axis weights: \(profile.weightSummary)")
+            debugLog("gaze placement fits: \(profile.placementSummary)")
         }
 
         if Settings.shared.gazeCameraAlwaysOn {

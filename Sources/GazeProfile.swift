@@ -79,13 +79,13 @@ struct GazeProfile {
     /// moving up or down, and sit near the middle of whichever screen won.
     ///
     /// Placement wants the opposite: every axis at face value, fitted to where
-    /// you were actually looking. Horizontal gaze is head yaw plus eye yaw and
-    /// vertical is head pitch plus eye pitch, so each is a least-squares fit
-    /// over its own two axes, per display.
+    /// you were actually looking. Horizontal gaze is mostly head yaw plus eye
+    /// yaw and vertical mostly head pitch plus eye pitch, so each is a
+    /// least-squares fit per display, over its own two axes and — where the
+    /// calibration has the dots to support it — the other two as well.
     func point(for sample: GazeSample) -> CGPoint? {
         guard let display = display(for: sample), let fit = placements[display] else { return nil }
-        return CGPoint(x: fit.x.constant + fit.x.head * sample.headX + fit.x.eye * sample.eyeX,
-                       y: fit.y.constant + fit.y.head * sample.headY + fit.y.eye * sample.eyeY)
+        return CGPoint(x: fit.x(sample), y: fit.y(sample))
     }
 
     /// How readable each axis turned out to be, for the debug trace.
@@ -104,47 +104,83 @@ struct GazeProfile {
 
     // MARK: Placement
 
-    /// One axis of the dot: `constant + head * headAxis + eye * eyeAxis`.
+    /// One axis of the dot, as a weight on each measured axis plus an offset.
+    /// The cross-axis weights stay zero when the calibration was too small to
+    /// fit them.
     struct Placement {
         var constant = 0.0
-        var head = 0.0
-        var eye = 0.0
+        var headX = 0.0
+        var eyeX = 0.0
+        var headY = 0.0
+        var eyeY = 0.0
+
+        func callAsFunction(_ sample: GazeSample) -> Double {
+            constant + headX * sample.headX + eyeX * sample.eyeX
+                + headY * sample.headY + eyeY * sample.eyeY
+        }
     }
 
-    /// Least squares for `value ≈ c + p * first + q * second`, or nil when the
-    /// inputs don't vary enough to pin the coefficients down — a calibration
-    /// where every dot read the same has nothing to fit and should draw
-    /// nothing rather than a confident guess.
-    private static func solve(_ rows: [(first: Double, second: Double, value: Double)]) -> Placement? {
-        guard rows.count >= 3 else { return nil }
-        let n = Double(rows.count)
-        let sf = rows.reduce(0) { $0 + $1.first }
-        let ss = rows.reduce(0) { $0 + $1.second }
-        let sv = rows.reduce(0) { $0 + $1.value }
-        let sff = rows.reduce(0) { $0 + $1.first * $1.first }
-        let sss = rows.reduce(0) { $0 + $1.second * $1.second }
-        let sfs = rows.reduce(0) { $0 + $1.first * $1.second }
-        let sfv = rows.reduce(0) { $0 + $1.first * $1.value }
-        let ssv = rows.reduce(0) { $0 + $1.second * $1.value }
+    /// The measured axes and the Placement weights they pair with, in one fixed
+    /// order so a solved coefficient vector reads back into a Placement.
+    private static let axes: [KeyPath<GazeSample, Double>] = [\.headX, \.eyeX, \.headY, \.eyeY]
+    private static let slots: [WritableKeyPath<Placement, Double>] = [\.headX, \.eyeX, \.headY, \.eyeY]
 
-        // Normal equations, solved by Cramer's rule: only 3x3, and a singular
-        // system is a real answer here rather than something to work around.
-        let m = [[n, sf, ss], [sf, sff, sfs], [ss, sfs, sss]]
-        let rhs = [sv, sfv, ssv]
-        func determinant(_ a: [[Double]]) -> Double {
-            a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
-        }
-        let base = determinant(m)
-        guard abs(base) > 1e-9 else { return nil }
+    /// Least squares for `value ≈ c + Σ coefficient · feature`, or nil when the
+    /// readings can't pin the coefficients down — a calibration where every dot
+    /// measured the same has nothing to fit and should draw nothing rather than
+    /// a confident guess.
+    private static func solve(features: [[Double]], values: [Double]) -> [Double]? {
+        let terms = (features.first?.count ?? 0) + 1
+        // Headroom over the parameter count, not merely enough to be solvable.
+        // A fit with as many parameters as readings passes exactly through
+        // every one of them, which means it has fitted the jitter.
+        guard features.count >= terms + 2 else { return nil }
 
-        func replacing(_ column: Int) -> Double {
-            var copy = m
-            for row in 0..<3 { copy[row][column] = rhs[row] }
-            return determinant(copy) / base
+        // Normal equations, built with a leading 1 for the constant term, then
+        // Gauss-Jordan with partial pivoting. At most 5x5.
+        let design = features.map { [1.0] + $0 }
+        var matrix = [[Double]](repeating: [Double](repeating: 0, count: terms + 1), count: terms)
+        for (row, value) in zip(design, values) {
+            for i in 0..<terms {
+                for j in 0..<terms { matrix[i][j] += row[i] * row[j] }
+                matrix[i][terms] += row[i] * value
+            }
         }
-        return Placement(constant: replacing(0), head: replacing(1), eye: replacing(2))
+
+        for column in 0..<terms {
+            guard let pivot = (column..<terms).max(by: { abs(matrix[$0][column]) < abs(matrix[$1][column]) }),
+                  abs(matrix[pivot][column]) > 1e-9 else { return nil }
+            matrix.swapAt(column, pivot)
+            let lead = matrix[column][column]
+            for j in column...terms { matrix[column][j] /= lead }
+            for row in 0..<terms where row != column {
+                let factor = matrix[row][column]
+                guard factor != 0 else { continue }
+                for j in column...terms { matrix[row][j] -= factor * matrix[column][j] }
+            }
+        }
+        return (0..<terms).map { matrix[$0][terms] }
+    }
+
+    /// One axis of one display's dot. `own` are the axes that carry it directly,
+    /// `cross` the ones that only correct it, dropped when the dots are too few
+    /// to tell a real correction from noise.
+    private static func placement(_ group: [GazeReference],
+                                  own: [Int],
+                                  cross: [Int],
+                                  value: (CGPoint) -> CGFloat) -> Placement? {
+        let used = group.count >= gazePlacementCoupledDots ? own + cross : own
+        let features = group.map { reference in
+            used.map { reference.sample[keyPath: axes[$0]] }
+        }
+        guard let solved = solve(features: features, values: group.map { Double(value($0.point!)) })
+        else { return nil }
+
+        var out = Placement(constant: solved[0])
+        for (axis, coefficient) in zip(used, solved.dropFirst()) {
+            out[keyPath: slots[axis]] = coefficient
+        }
+        return out
     }
 
     private static func fitPlacements(
@@ -157,13 +193,9 @@ struct GazeProfile {
 
         var out: [CGDirectDisplayID: (x: Placement, y: Placement)] = [:]
         for (display, group) in grouped {
-            let horizontal = group.map {
-                (first: $0.sample.headX, second: $0.sample.eyeX, value: Double($0.point!.x))
-            }
-            let vertical = group.map {
-                (first: $0.sample.headY, second: $0.sample.eyeY, value: Double($0.point!.y))
-            }
-            guard let x = solve(horizontal), let y = solve(vertical) else { continue }
+            guard let x = placement(group, own: [0, 1], cross: [2, 3], value: \.x),
+                  let y = placement(group, own: [2, 3], cross: [0, 1], value: \.y)
+            else { continue }
             out[display] = (x: x, y: y)
         }
         return out

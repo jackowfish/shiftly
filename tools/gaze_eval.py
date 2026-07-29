@@ -185,33 +185,37 @@ def score(model, weights, rows, margin, frames, centroid):
     }
 
 
-def fit_linear(rows_):
-    """Least squares for value ~ c + p*first + q*second, or None if singular."""
-    n = float(len(rows_))
-    if n < 3:
-        return None
-    sf = sum(r[0] for r in rows_); ss = sum(r[1] for r in rows_); sv = sum(r[2] for r in rows_)
-    sff = sum(r[0] * r[0] for r in rows_); sss = sum(r[1] * r[1] for r in rows_)
-    sfs = sum(r[0] * r[1] for r in rows_)
-    sfv = sum(r[0] * r[2] for r in rows_); ssv = sum(r[1] * r[2] for r in rows_)
-    m = [[n, sf, ss], [sf, sff, sfs], [ss, sfs, sss]]
-    rhs = [sv, sfv, ssv]
+def fit_ls(features, values):
+    """Least squares for value ~ c + sum(coefficient * feature), or None if singular.
 
-    def det(a):
-        return (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
-
-    base = det(m)
-    if abs(base) < 1e-9:
+    Mirrors GazeProfile.solve, including its refusal to fit without headroom
+    over the parameter count: a fit with as many parameters as dots passes
+    through every one of them and has therefore fitted the jitter.
+    """
+    terms = len(features[0]) + 1 if features else 0
+    if len(features) < terms + 2:
         return None
-    out = []
-    for col in range(3):
-        copy = [row[:] for row in m]
-        for r in range(3):
-            copy[r][col] = rhs[r]
-        out.append(det(copy) / base)
-    return out
+    design = [[1.0] + list(f) for f in features]
+    m = [[sum(r[i] * r[j] for r in design) for j in range(terms)]
+         + [sum(r[i] * v for r, v in zip(design, values))] for i in range(terms)]
+
+    for col in range(terms):
+        pivot = max(range(col, terms), key=lambda r: abs(m[r][col]))
+        if abs(m[pivot][col]) < 1e-9:
+            return None
+        m[col], m[pivot] = m[pivot], m[col]
+        lead = m[col][col]
+        m[col] = [v / lead for v in m[col]]
+        for r in range(terms):
+            if r != col and m[r][col]:
+                factor = m[r][col]
+                m[r] = [a - factor * b for a, b in zip(m[r], m[col])]
+    return [m[i][terms] for i in range(terms)]
+
+
+# Readings per display before the placement fit takes on the cross-axis terms.
+# Matches gazePlacementCoupledDots in Model.swift.
+COUPLED_DOTS = 10
 
 
 def coverage(rows_):
@@ -244,10 +248,14 @@ def placement_report(train_rows, test_rows, weights):
                 continue
             idw_refs.setdefault(display, []).append((x, point))
         for display, pts in idw_refs.items():
-            fx = fit_linear([(x[0], x[2], p[0]) for x, p in pts])   # headX, eyeX -> targetX
-            fy = fit_linear([(x[1], x[3], p[1]) for x, p in pts])   # headY, eyeY -> targetY
+            # Own axis first, then the cross terms once there are dots enough to
+            # tell a real correction from noise. Same order and gate as the app.
+            axes = [0, 2, 1, 3] if len(pts) >= COUPLED_DOTS else [0, 2]      # headX, eyeX (+ headY, eyeY)
+            axes_y = [1, 3, 0, 2] if len(pts) >= COUPLED_DOTS else [1, 3]    # headY, eyeY (+ headX, eyeX)
+            fx = fit_ls([[x[i] for i in axes] for x, _ in pts], [p[0] for _, p in pts])
+            fy = fit_ls([[x[i] for i in axes_y] for x, _ in pts], [p[1] for _, p in pts])
             if fx and fy:
-                linear[display] = (fx, fy)
+                linear[display] = ((axes, fx), (axes_y, fy))
         return idw_refs, linear
 
     def idw(fitted, display, x):
@@ -264,8 +272,9 @@ def placement_report(train_rows, test_rows, weights):
     def lin(fitted, display, x):
         if display not in fitted[1]:
             return None
-        fx, fy = fitted[1][display]
-        return (fx[0] + fx[1] * x[0] + fx[2] * x[2], fy[0] + fy[1] * x[1] + fy[2] * x[3])
+        def apply(axes, c):
+            return c[0] + sum(c[i + 1] * x[axis] for i, axis in enumerate(axes))
+        return tuple(apply(axes, c) for axes, c in fitted[1][display])
 
     # Which fit each test frame is scored against: its own dot held out when
     # train and test are the same capture, otherwise just the one fit.

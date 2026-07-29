@@ -156,14 +156,32 @@ enum GazeCalibrationStyle: CaseIterable {
     }
 }
 
-/// Targets per display per pass, as fractions of its frame. Four rather than
-/// five only to keep two passes to about half a minute.
+/// Targets per display per pass, as fractions of its frame: a 3x2 grid.
+///
+/// It was four corners, which is enough to fit the dot from its own axis alone
+/// but not enough to also fit the cross terms — how vertical gaze shifts the
+/// horizontal reading and back. Measured against held-out dots, adding those
+/// terms at four corners per pass made the fit worse on one display and better
+/// on the other, which is what overfitting looks like. Six carries the extra
+/// parameters, at the cost of about twelve seconds.
+///
+/// Three columns rather than three rows because the wide axis is where a single
+/// bad reading does the most damage: on an ultrawide the horizontal fit is
+/// stretched over three thousand pixels, and an interior column gives it
+/// something to hold onto in the middle.
 let gazeCalibrationTargets: [CGPoint] = [
     CGPoint(x: 0.12, y: 0.16),
+    CGPoint(x: 0.50, y: 0.16),
     CGPoint(x: 0.88, y: 0.16),
     CGPoint(x: 0.12, y: 0.84),
+    CGPoint(x: 0.50, y: 0.84),
     CGPoint(x: 0.88, y: 0.84),
 ]
+
+/// Readings a display needs before the dot's placement fit takes on the
+/// cross-axis terms. Below it the fit stays on its own axis, so a calibration
+/// recorded at four dots per pass keeps the shape it was measured to be best at.
+let gazePlacementCoupledDots = 10
 
 let gazeCalibrationSettle: TimeInterval = 0.9
 let gazeCalibrationCollect: TimeInterval = 0.7

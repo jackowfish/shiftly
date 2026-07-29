@@ -34,21 +34,31 @@ final class GestureEngine {
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
 
+        // Gaze picks the target once, when the gesture opens, and the rest of
+        // the gesture stays on it. An earlier version also re-asked on every
+        // press and handed off to whatever you'd since glanced at, committing
+        // the pending placement on the way out. It read as the window being
+        // yanked away mid-adjustment: you look up to check the result, and the
+        // next arrow is acting on something else.
         if !active {
-            guard let focused = focusedWindow(), let current = frame(of: focused) else {
-                log("no focused window (accessibility permission missing?)")
+            // With eye tracking on, the first press starts on whatever window
+            // sits on the display being looked at, falling back to the normal
+            // frontmost window when it's off, stale, or already the right one.
+            let gazed = GazeFocus.shared.gazedWindow()
+            // Fall through to the normal window if the gaze pick turns out to
+            // have no readable frame, rather than failing the whole gesture.
+            var target = gazed
+            if target == nil || frame(of: target!) == nil {
+                if gazed != nil { debugLog("gaze pick had no readable frame, using frontmost") }
+                target = focusedWindow()
+            }
+            guard let focused = target, let current = frame(of: focused) else {
+                log("no window to act on (frontmost app exposes none, or accessibility is off)")
                 NSSound.beep()
                 return
             }
-            window = focused
-            original = current
-            preview = current
-            previewScreen = screenContaining(current)
-            layer = newLayer
-            resetLayerState()
-            active = true
+            begin(on: focused, frame: current, layer: newLayer)
             isFirstPress = true
-            startPolling()
         } else if newLayer != layer {
             // Carry the pending placement across so layers compose.
             original = preview
@@ -65,6 +75,17 @@ final class GestureEngine {
             setFrame(preview.integral, on: window)
         }
         log("preview: \(label)")
+    }
+
+    private func begin(on target: AXUIElement, frame rect: CGRect, layer newLayer: Layer) {
+        window = target
+        original = rect
+        preview = rect
+        previewScreen = screenContaining(rect)
+        layer = newLayer
+        resetLayerState()
+        active = true
+        startPolling()
     }
 
     private func resetLayerState() {

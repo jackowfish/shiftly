@@ -18,6 +18,24 @@ func log(_ message: String) {
     }
 }
 
+/// Verbose tracing, off unless Debug Logging is on in the menu. The message is
+/// an autoclosure because some of these sit on the 30fps sample path and would
+/// otherwise build strings nobody reads.
+func debugLog(_ message: @autoclosure () -> String) {
+    guard Settings.shared.debugLogging else { return }
+    log("debug: \(message())")
+}
+
+/// Timers on the gaze paths run in `.common` so menu tracking or a mouse drag
+/// can't stall a sequence that's meant to advance on its own.
+func scheduleTimer(after interval: TimeInterval,
+                   repeats: Bool = false,
+                   _ action: @escaping () -> Void) -> Timer {
+    let timer = Timer(timeInterval: interval, repeats: repeats) { _ in action() }
+    RunLoop.main.add(timer, forMode: .common)
+    return timer
+}
+
 let application = NSApplication.shared
 let appDelegate = AppDelegate()
 application.delegate = appDelegate

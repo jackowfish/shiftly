@@ -9,11 +9,22 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/Shiftly.icns" "$APP/Contents/Resources/Shiftly.icns"
 
-swiftc -O "$ROOT"/Sources/*.swift \
+# Recursive: Sources is grouped into App/, Snapping/ and Gaze/. A flat glob
+# would compile whatever sits at the top level and silently miss the rest,
+# which fails as "cannot find X in scope" rather than as a missing file.
+SWIFT_FILES=$(find "$ROOT/Sources" -name '*.swift' | sort)
+[ -n "$SWIFT_FILES" ] || { echo "no Swift sources found under $ROOT/Sources" >&2; exit 1; }
+
+# shellcheck disable=SC2086
+swiftc -O $SWIFT_FILES \
 	-o "$APP/Contents/MacOS/Shiftly" \
 	-framework AppKit \
 	-framework Carbon \
-	-framework ApplicationServices
+	-framework ApplicationServices \
+	-framework AVFoundation \
+	-framework CoreMedia \
+	-framework CoreVideo \
+	-framework Vision
 
 # Sign with a stable identity so the Accessibility grant survives rebuilds
 # (ad-hoc signing changes the app's identity every build, and TCC keys grants
@@ -30,11 +41,12 @@ elif echo "$IDENTITIES" | grep -q "Shiftly Dev Signing"; then
 else
 	IDENTITY=""
 fi
+ENTITLEMENTS="$ROOT/Shiftly.entitlements"
 if [ -n "$IDENTITY" ]; then
-	codesign --force --options runtime --sign "$IDENTITY" "$APP"
+	codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 else
 	echo "warning: no signing identity found, ad-hoc signing (accessibility grant will break on rebuild)" >&2
-	codesign --force --sign - "$APP"
+	codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP"
 fi
 
 echo "built $APP"

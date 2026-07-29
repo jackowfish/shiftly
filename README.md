@@ -30,6 +30,29 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 | Thirds & sixths | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down will grab the upper or lower half of whatever slot you're in. |
 | Displays | Cmd+Shift | Sends the window to the display in that direction, keeping its relative size and position. |
 
+## Eye Tracking (Beta)
+
+Off by default, under Eye Tracking (Beta) in the menu bar. It changes which window the gestures above act on. Look at a window, hold your modifier & tap an arrow, and it grabs that one instead of whatever you were last focused on.
+
+I'm using whatever camera your mac is plugged into + Vision's face landmarks, all on device. It reads your head angle from where your nose sits relative to your eye line, plus pupil offset and how open your eyelids are. The eyes matter the most because a webcam can't see your head turn far enough to face a monitor off to one side (i.e. dual / triple monitor setups)
+
+### Calibrating
+
+Required, and it takes about a minute. Recalibrate if you change your display arrangement. Follow the instructions on screen - if it's not clear, the first calibration pass you should try to keep your head as still as possible while moving just your eyes across your monitors.
+
+### How well it works
+
+| slot | acts right | acts wrong | does nothing |
+|---|---|---|---|
+| half of a 3440x1440 | 68% | 3% | 29% |
+| third of a 3440x1440 | 61% | 6% | 33% |
+| sixth of a 3440x1440 | 48% | 10% | 42% |
+| sixth of a 1692x3008 | 39% | 16% | 45% |
+
+It's currently good for grabbing one of the two or three windows you actually have open, and it gets shaky once the slots get small. A slot only has to beat the other windows that are really there, which is an easier problem than a full tiling.
+
+Webcam gaze is good to about 3-4° of visual angle, a couple hundred pixels at desk distance.
+
 ## Install
 
 ```sh
@@ -43,9 +66,26 @@ Grant Accessibility when prompted (System Settings, Privacy & Security, Accessib
 
 The build signs with a `Shiftly Dev Signing` certificate if one exists in your keychain, and falls back to ad-hoc signing otherwise.
 
+`build.sh` is what produces the app: SwiftPM can't assemble a `.app`, since that needs the Info.plist, the icon, the entitlements and a signature.
+
+There's a `Package.swift` anyway, purely so editors resolve the module. Without it SourceKit analyses each file by itself and reports every cross-file symbol as missing. 
+
+`swift build` however works to type-checks everything and gives you a bare binary; it just isn't actually something you can publish.
+
+## Layout
+
+```
+Sources/App/        menu bar app, settings, updater
+Sources/Snapping/   hotkeys, the gesture ladders, geometry, the overlay
+Sources/Gaze/       camera, calibration, the profile, window targeting
+tools/              gaze_eval.py and the calibration screenshot renderer
+build.sh            assembles and signs the .app
+Package.swift       for editors and `swift build`, not for shipping
+```
+
 ## Settings
 
-All settings are in the menu bar item. Currently thats per-layer modifier combos, placement rectangle color (or off entirely, which moves windows live on each press), and animation speed. Settings persist across restarts.
+All settings are in the menu bar item. Currently thats per-layer modifier combos, placement rectangle color (or off entirely, which moves windows live on each press), animation speed, and the eye tracking options above. Settings persist across restarts.
 
 ## License
 

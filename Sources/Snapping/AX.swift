@@ -4,7 +4,18 @@ import ApplicationServices
 /// Focused window of the frontmost app. Sets AXManualAccessibility first:
 /// Electron apps keep their AX tree dormant until someone does.
 func focusedWindow() -> AXUIElement? {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+    guard let app = NSWorkspace.shared.frontmostApplication else {
+        log("no frontmost application")
+        return nil
+    }
+    // Our own overlay and calibration windows are frontmost while they're up,
+    // and they have no AX window to snap. Returning nil here lets the caller
+    // fall back rather than reporting a missing permission.
+    guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+        debugLog("frontmost app is Shiftly itself, no window to act on")
+        return nil
+    }
+    debugLog("frontmost app: \(app.localizedName ?? "?") (pid \(app.processIdentifier))")
     let appElement = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
 

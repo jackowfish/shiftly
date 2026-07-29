@@ -20,6 +20,8 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Shiftly reads your head and eye position on device to pick which window zone you are looking at. Video never leaves your Mac and is never recorded.</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSPrincipalClass</key>

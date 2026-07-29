@@ -20,6 +20,10 @@ final class GazeCalibrator {
     private var noise: [GazeSample] = []
     private var capture: GazeCapture.Session?
     private var index = 0
+    /// Counting in to the next group, and the target index already counted in
+    /// for, so finishing a countdown doesn't immediately start another.
+    private var countdown = 0
+    private var countedIn = -1
     private var collecting = false
     private var stepTimer: Timer?
     private var watchdog: Timer?
@@ -49,6 +53,8 @@ final class GazeCalibrator {
         noise = []
         capture = GazeCapture.Session()
         index = 0
+        countdown = 0
+        countedIn = -1
 
         // Style outermost, so each pass is one continuous instruction rather
         // than asking you to switch how you're sitting at every dot.
@@ -77,7 +83,9 @@ final class GazeCalibrator {
 
         // Nothing here should ever be able to hang without saying so. If the
         // step chain stalls, this ends it and leaves a line in the log.
-        let budget = Double(targets.count) * (gazeCalibrationSettle + gazeCalibrationCollect) + 15
+        let groups = GazeCalibrationStyle.allCases.count * NSScreen.screens.count
+        let budget = Double(targets.count) * (gazeCalibrationSettle + gazeCalibrationCollect)
+            + Double(groups * gazeCalibrationCountdown) * gazeCalibrationTick + 15
         watchdog = scheduleTimer(after: budget) { [weak self] in
             guard let self, self.running else { return }
             log("gaze: calibration stalled at target \(self.index + 1)/\(self.targets.count)")
@@ -102,6 +110,26 @@ final class GazeCalibrator {
         let target = targets[index]
         collecting = false
         collected = []
+
+        // Count in whenever the run moves to another screen or into the second
+        // pass. Without it the first dot of each group appears on a display you
+        // may not be looking at yet, and its reading is whatever your eyes were
+        // doing on the way there.
+        let previous = index > 0 ? targets[index - 1] : nil
+        let newGroup = previous.map { $0.display != target.display || $0.style != target.style } ?? true
+        if newGroup && countedIn != index {
+            if countdown == 0 { countdown = gazeCalibrationCountdown }
+            showCountdown(on: target.display, style: target.style, remaining: countdown,
+                          progress: Double(index) / Double(targets.count))
+            stepTimer = scheduleTimer(after: gazeCalibrationTick) { [weak self] in
+                guard let self, self.running else { return }
+                self.countdown -= 1
+                if self.countdown == 0 { self.countedIn = self.index }
+                self.advance()
+            }
+            return
+        }
+
         show(target: target.point, style: target.style, progress: Double(index) / Double(targets.count))
         debugLog("calibration target \(index + 1)/\(targets.count) [\(target.style.name)] on display \(target.display) at \(target.point)")
 
@@ -233,6 +261,24 @@ final class GazeCalibrator {
 
     /// The dot lives in AX coordinates; each view draws in its own screen's
     /// flipped, screen-local space.
+    /// Full-screen count-in on one display, blank on the others, so the screen
+    /// showing numbers is the one to look at.
+    private func showCountdown(on display: CGDirectDisplayID,
+                               style: GazeCalibrationStyle,
+                               remaining: Int,
+                               progress: Double) {
+        let name = NSScreen.screens.first { displayID(of: $0) == display }?.localizedName
+        for (key, view) in views {
+            view.progress = progress
+            view.target = nil
+            view.style = style
+            view.countdown = key == display ? remaining : nil
+            view.countdownTitle = key == display ? "Look at \(name ?? "this display")" : ""
+            view.needsDisplay = true
+        }
+        debugLog("calibration counting in on display \(display) [\(style.name)]: \(remaining)")
+    }
+
     private func show(target: CGPoint, style: GazeCalibrationStyle, progress: Double) {
         let screen = nearestScreen(to: target)
         let identifier = displayID(of: screen)
@@ -243,6 +289,7 @@ final class GazeCalibrator {
         for (key, view) in views {
             view.style = style
             view.progress = progress
+            view.countdown = nil
             view.target = key == identifier ? local : nil
             view.needsDisplay = true
         }
@@ -263,6 +310,8 @@ final class GazeCalibrator {
 final class CalibrationView: NSView {
     var target: CGPoint?
     var style: GazeCalibrationStyle = .still
+    var countdown: Int?
+    var countdownTitle = ""
     var progress: Double = 0
     var onClick: (() -> Void)?
 
@@ -289,7 +338,27 @@ final class CalibrationView: NSView {
             ring.stroke()
         }
 
-        let hint = target == nil ? "Calibrating on another display…" : style.hint
+        if let countdown {
+            drawCentered("\(countdown)",
+                         font: .systemFont(ofSize: 132, weight: .thin),
+                         color: accent,
+                         y: bounds.midY - 66)
+            drawCentered(countdownTitle,
+                         font: .systemFont(ofSize: 30, weight: .semibold),
+                         color: .white,
+                         y: bounds.midY - 150)
+            drawCentered(style.hint,
+                         font: .systemFont(ofSize: 19, weight: .regular),
+                         color: NSColor.white.withAlphaComponent(0.8),
+                         y: bounds.midY + 100)
+        }
+
+        let hint: String
+        if countdown != nil {
+            hint = ""
+        } else {
+            hint = target == nil ? "Calibrating on another display…" : style.hint
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 17, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.85),
@@ -306,6 +375,13 @@ final class CalibrationView: NSView {
         filled.size.width = bar.width * CGFloat(min(max(progress, 0), 1))
         accent.setFill()
         NSBezierPath(roundedRect: filled, xRadius: 2, yRadius: 2).fill()
+    }
+
+    private func drawCentered(_ text: String, font: NSFont, color: NSColor, y: CGFloat) {
+        guard !text.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let size = text.size(withAttributes: attributes)
+        text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: y), withAttributes: attributes)
     }
 
     override func mouseDown(with event: NSEvent) {

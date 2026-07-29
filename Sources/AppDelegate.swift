@@ -330,9 +330,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func offerCalibration() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        let seconds = Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count
-            * GazeCalibrationStyle.allCases.count)
-            * (gazeCalibrationSettle + gazeCalibrationCollect))
+        let groups = NSScreen.screens.count * GazeCalibrationStyle.allCases.count
+        let seconds = Int(Double(groups * gazeCalibrationTargets.count)
+            * (gazeCalibrationSettle + gazeCalibrationCollect)
+            + Double(groups * gazeCalibrationCountdown) * gazeCalibrationTick)
         alert.messageText = "Calibrate eye tracking?"
         alert.informativeText = """
             Eye tracking needs to learn what each of your displays looks like to \

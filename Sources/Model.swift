@@ -168,6 +168,16 @@ let gazeCalibrationTargets: [CGPoint] = [
 let gazeCalibrationSettle: TimeInterval = 0.9
 let gazeCalibrationCollect: TimeInterval = 0.7
 
+/// Counted in on each display before its run of dots starts.
+///
+/// Without it the first dot of a group lands on a screen you may not be looking
+/// at yet, and its reading is whatever your eyes were doing on the way there —
+/// a bad reference that then gets matched against for the life of the profile.
+/// It's also where the instruction for the pass gets read, since the two passes
+/// ask you to sit differently.
+let gazeCalibrationCountdown = 3
+let gazeCalibrationTick: TimeInterval = 0.8
+
 let overlayColors: [(name: String, title: String, color: NSColor)] = [
     ("accent", "Accent", .controlAccentColor),
     ("blue", "Blue", .systemBlue),

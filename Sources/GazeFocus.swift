@@ -24,13 +24,25 @@ final class GazeFocus {
 
     private var pollTimer: Timer?
     private var warm = false
+    private var heldFrames = 0
 
     private var display: CGDirectDisplayID?
-    private var updatedAt: TimeInterval = 0
+    /// Last frame a face was found at all. Separate from the classification,
+    /// which only changes when you actually look somewhere else.
+    private var lastFaceAt: TimeInterval = 0
     private var pending: CGDirectDisplayID?
     private var pendingFrames = 0
 
     private init() {}
+
+    /// Display currently being looked at, for the menu to report.
+    var currentDisplayName: String? {
+        guard let display,
+              ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter,
+              let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
+        else { return nil }
+        return screen.localizedName
+    }
 
     // MARK: Lifecycle
 
@@ -40,6 +52,8 @@ final class GazeFocus {
         display = nil
         pending = nil
         pendingFrames = 0
+        heldFrames = 0
+        lastFaceAt = 0
 
         guard Settings.shared.gazeEnabled else {
             warm = false
@@ -53,15 +67,16 @@ final class GazeFocus {
             self?.handle(sample)
         }
 
-        if Settings.shared.gazeKeepCameraWarm {
+        if Settings.shared.gazeCameraAlwaysOn {
             warm = true
             GazeTracker.shared.start()
+            log("gaze: enabled, camera always on")
         } else {
             pollTimer = Timer.scheduledTimer(withTimeInterval: gazePoll, repeats: true) { [weak self] _ in
                 self?.poll()
             }
+            log("gaze: enabled, camera on demand")
         }
-        log("gaze: enabled")
     }
 
     /// Calibration drives the tracker itself.
@@ -78,58 +93,51 @@ final class GazeFocus {
         return CGEventSource.flagsState(.combinedSessionState).intersection(mask)
     }
 
-    /// Warm the camera while the modifiers could still turn into a gesture, so
-    /// an estimate is ready by the time an arrow arrives. Anything that is a
-    /// prefix of some layer's chord counts, which for the defaults means ⌘ alone.
+    /// Warm the camera once the modifiers have been held long enough to be a
+    /// gesture rather than a copy-paste, so an estimate is ready by the time an
+    /// arrow arrives.
     private func poll() {
         let held = heldFlags()
         let arming = !held.isEmpty && Layer.allCases.contains { layer in
             held.isSubset(of: carbonToEventFlags(Settings.shared.modifiers(for: layer)))
         }
 
-        if arming && !warm {
+        guard arming else {
+            heldFrames = 0
+            if warm {
+                warm = false
+                GazeTracker.shared.stopSoon()
+            }
+            return
+        }
+
+        heldFrames += 1
+        if heldFrames >= gazeWarmDwell && !warm {
             warm = true
             GazeTracker.shared.start()
-        } else if !arming && warm {
-            warm = false
-            GazeTracker.shared.stopSoon()
         }
     }
 
     // MARK: Estimate
 
     private func handle(_ sample: GazeSample) {
-        // The flips only apply to the fallback map. A fitted map derives its own
-        // signs from calibration data, which is collected raw.
-        var adjusted = sample
-        if !Settings.shared.isGazeCalibrated {
-            if Settings.shared.gazeInvertX {
-                adjusted.headX = -adjusted.headX
-                adjusted.eyeX = -adjusted.eyeX
-            }
-            if Settings.shared.gazeInvertY {
-                adjusted.headY = 2 * gazeHeadYBias - adjusted.headY
-                adjusted.eyeY = -adjusted.eyeY
-            }
-        }
+        // Freshness is about the camera still seeing a face, not about the
+        // answer changing. Tying it to the answer meant that looking steadily at
+        // one display, or hovering somewhere ambiguous, aged the estimate out
+        // and quietly stopped retargeting until something happened to shift.
+        lastFaceAt = ProcessInfo.processInfo.systemUptime
 
-        let map = Settings.shared.gazeMap ?? GazeMap.fallback()
-        let point = map.point(for: adjusted)
-        let screen = nearestScreen(to: point)
-        let candidate = displayID(of: screen)
-
-        if candidate == display {
-            updatedAt = ProcessInfo.processInfo.systemUptime
+        guard let profile = Settings.shared.gazeProfile else { return }
+        guard let candidate = profile.display(for: sample) else {
             pending = nil
             pendingFrames = 0
             return
         }
-
-        // Has to land well inside the new display, not just over its edge.
-        let rect = flipRect(screen.frame)
-        let inset = rect.insetBy(dx: rect.width * gazeDisplayDeadband,
-                                 dy: rect.height * gazeDisplayDeadband)
-        guard inset.contains(point) else { return }
+        guard candidate != display else {
+            pending = nil
+            pendingFrames = 0
+            return
+        }
 
         if candidate == pending {
             pendingFrames += 1
@@ -140,9 +148,9 @@ final class GazeFocus {
         guard pendingFrames >= gazeDisplayHold else { return }
 
         display = candidate
-        updatedAt = ProcessInfo.processInfo.systemUptime
         pending = nil
         pendingFrames = 0
+        log("gaze: looking at display \(candidate)")
     }
 
     // MARK: Focus
@@ -152,7 +160,7 @@ final class GazeFocus {
     func gazedWindow() -> AXUIElement? {
         guard Settings.shared.gazeEnabled, NSScreen.screens.count > 1 else { return nil }
         guard let target = display,
-              ProcessInfo.processInfo.systemUptime - updatedAt < gazeStaleAfter
+              ProcessInfo.processInfo.systemUptime - lastFaceAt < gazeStaleAfter
         else { return nil }
         guard let screen = NSScreen.screens.first(where: { displayID(of: $0) == target }) else { return nil }
 

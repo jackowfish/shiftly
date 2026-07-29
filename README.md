@@ -40,17 +40,27 @@ On a single display it's inert, and it stays inert whenever you're already looki
 
 ### How it sees
 
-Front camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring.
+Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring. The pupils matter too, because a camera on one display can't see your head turn far enough to face a monitor off to the side; the eyes make up the angle the head didn't travel.
 
-The only question asked of the estimate is which display, a tens-of-degrees signal that's the forgiving end of what a webcam resolves, with a six-frame hold and a deadband so a flicker at a screen edge can't retarget you. The pupils still matter because a camera on the centre display can't see your head turn far enough to face an outer monitor; the eyes make up the angle the head didn't travel.
+Calibration records what each display measures like, and a reading is classified by finding the nearest labelled one. There's deliberately nothing to configure. An earlier version mapped face geometry onto desktop coordinates, which meant telling it which way round the camera was mounted, and that's where a "Flip Horizontal" control came from that nobody could be expected to interpret. Comparing against labelled readings makes mirroring, mounting, and how far you personally turn your head all fall out of the calibration for free.
 
-The camera runs while a modifier that could still become a gesture is held, and lingers 20 seconds after, so it's warm through a burst of window management and off when you stop. "Keep camera warm" pins it on for instant response at the cost of the green light. A gesture that beats the warmup falls back to normal focus rather than acting on a stale reading.
+It compares against individual readings rather than a per-display average, because an ultrawide is wide enough that its left edge and right edge measure quite differently, and the average of the two can sit closer to the display next door.
+
+A display has to win by a clear margin and hold it for six frames. Anything ambiguous leaves focus alone.
 
 ### Calibration
 
-Uncalibrated it runs on guessed constants for an average face at an average desk, usually enough to tell two or three displays apart. Calibrate walks a dot around each screen for about a second and a half per stop and fits the mapping to you, which also settles your vertical baseline and the sign of the horizontal axis. If you skip it and it comes out mirrored, Flip Horizontal fixes it; calibrating supersedes both flips.
+Required. Without labelled readings there's nothing to compare against, so the feature does nothing until you calibrate. A dot walks around each screen, about a second and a half per stop, and you look at it. Recalibrate after changing your display arrangement; the menu says when the saved calibration was recorded against a different one.
 
-Recalibrate after changing your display arrangement. The menu tells you when the saved calibration was fitted against a different one.
+The menu also shows which display it currently thinks you're looking at, which is the quickest way to tell whether it's working.
+
+### Camera
+
+Two modes, under Eye Tracking > Camera.
+
+**Always on** (default) runs the camera the whole time eye tracking is enabled. The light stays on, and the estimate is always current. This is the only mode where a fast gesture is reliably retargeted.
+
+**Only while holding a modifier** starts the camera after you've held a modifier long enough for it to be a gesture rather than a Cmd+C, and stops it five seconds after you let go. The dwell matters: Cmd is a prefix of the default layers and gets pressed constantly, so warming on every press left the camera on more or less permanently. In this mode a gesture that beats the camera starting falls back to normal focus rather than acting on a stale reading.
 
 ## Install
 

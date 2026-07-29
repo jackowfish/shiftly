@@ -62,37 +62,40 @@ let animationChoices: [(title: String, duration: Double)] = [
 
 // MARK: - Gaze
 
-/// Weight on the pupil term. The head covers most of the angle to a side
-/// display; the eyes cover the part it didn't travel, which on a wide desk is
-/// the part a single camera can't see the head make.
+/// Weight on the pupil term when comparing readings. The head covers most of
+/// the angle to a side display; the eyes cover the part it didn't travel, which
+/// on a wide desk is the part a single camera can't see the head make.
 let gazeHeadWeight = 0.7
 let gazeEyeWeight = 0.3
 
-/// Uncalibrated fallbacks. `headXSpan` is the nose offset (in inter-ocular
-/// widths) that reaches the edge of the desktop; `headYBias` is where a
-/// relaxed face sits before anyone has looked anywhere in particular.
+/// Plausible range of each axis, used to put them on comparable footing before
+/// they're compared. Head rotation is in inter-ocular widths, pupil offset is a
+/// fraction of the eye opening, and they swing over very different numbers.
 let gazeHeadXSpan = 0.30
 let gazeHeadYSpan = 0.18
-let gazeHeadYBias = 0.55
 let gazeEyeSpan = 0.70
 
 /// Frames are averaged into an exponential moving average before use. Raw
 /// landmarks jitter enough to flip the estimate across a display edge.
 let gazeSmoothing = 0.25
 
-/// A display has to win this many frames in a row, and the gaze point has to
-/// land this far inside it, before it counts as the one being looked at.
+/// The nearest display's reading has to be at least this much closer than the
+/// runner-up to count, and then has to win this many frames in a row.
+let gazeMargin = 0.75
 let gazeDisplayHold = 6
-let gazeDisplayDeadband: CGFloat = 0.06
 
-/// Modifier poll. A flagsState query, not an event tap, so Secure Input can't
-/// blind it. It only warms the camera: nothing is focused until an arrow lands.
+/// Modifier poll, used only to decide when to warm the camera. A flagsState
+/// query, not an event tap, so Secure Input can't blind it.
+///
+/// The dwell exists because ⌘ is a prefix of the default layers and you press
+/// it all day for Cmd+C and Cmd+Tab. Warming on every one of those left the
+/// camera effectively always on. A real gesture holds it past the dwell; a
+/// copy-paste doesn't.
 let gazePoll: TimeInterval = 0.04
+let gazeWarmDwell = 5
 
-/// How long the camera stays up after the modifiers go, when it isn't pinned
-/// warm. Long enough to cover a burst of window management, short enough that
-/// the light goes out when you stop.
-let gazeCameraLinger: TimeInterval = 20
+/// How long the camera stays up after the modifiers go, in on-demand mode.
+let gazeCameraLinger: TimeInterval = 5
 
 /// A gaze estimate older than this is thrown away rather than acted on, so a
 /// gesture that beats the camera's warmup falls back to normal focus instead of

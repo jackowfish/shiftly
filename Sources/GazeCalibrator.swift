@@ -12,8 +12,8 @@ final class GazeCalibrator {
 
     private var windows: [NSWindow] = []
     private var views: [CGDirectDisplayID: CalibrationView] = [:]
-    private var targets: [CGPoint] = []
-    private var observations: [GazeObservation] = []
+    private var targets: [(point: CGPoint, display: CGDirectDisplayID)] = []
+    private var references: [GazeReference] = []
     private var collected: [GazeSample] = []
     private var index = 0
     private var collecting = false
@@ -31,15 +31,16 @@ final class GazeCalibrator {
         onFinish = completion
 
         GazeFocus.shared.suspend()
-        observations = []
+        references = []
         collected = []
         index = 0
 
-        targets = NSScreen.screens.flatMap { screen -> [CGPoint] in
+        targets = NSScreen.screens.flatMap { screen -> [(CGPoint, CGDirectDisplayID)] in
             let area = usableFrame(of: screen)
+            let identifier = displayID(of: screen)
             return gazeCalibrationTargets.map { fraction in
-                CGPoint(x: area.minX + area.width * fraction.x,
-                        y: area.minY + area.height * fraction.y)
+                (CGPoint(x: area.minX + area.width * fraction.x,
+                         y: area.minY + area.height * fraction.y), identifier)
             }
         }
 
@@ -67,7 +68,7 @@ final class GazeCalibrator {
         let target = targets[index]
         collecting = false
         collected = []
-        show(target: target, progress: Double(index) / Double(targets.count))
+        show(target: target.point, progress: Double(index) / Double(targets.count))
 
         // Settle first, then average a burst. Averaging across the settle would
         // bake in the travel from the previous dot.
@@ -75,12 +76,12 @@ final class GazeCalibrator {
             guard let self else { return }
             self.collecting = true
             self.stepTimer = Timer.scheduledTimer(withTimeInterval: gazeCalibrationCollect, repeats: false) { _ in
-                self.record(target: target)
+                self.record(display: target.display)
             }
         }
     }
 
-    private func record(target: CGPoint) {
+    private func record(display: CGDirectDisplayID) {
         collecting = false
         if !collected.isEmpty {
             let count = Double(collected.count)
@@ -89,7 +90,7 @@ final class GazeCalibrator {
                 headY: collected.reduce(0) { $0 + $1.headY } / count,
                 eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
                 eyeY: collected.reduce(0) { $0 + $1.eyeY } / count)
-            observations.append(GazeObservation(target: target, sample: mean))
+            references.append(GazeReference(display: display, sample: mean))
         }
         index += 1
         advance()
@@ -110,13 +111,17 @@ final class GazeCalibrator {
         views = [:]
 
         var saved = false
-        if save, let map = GazeFit.map(from: observations) {
-            Settings.shared.gazeMap = map
+        // Every display needs at least one reading, or the ones that got none
+        // could never win and their windows would be unreachable.
+        let covered = Set(references.map(\.display))
+        let expected = Set(NSScreen.screens.map { displayID(of: $0) })
+        if save, !references.isEmpty, covered == expected {
+            Settings.shared.gazeProfile = GazeProfile(references: references)
             Settings.shared.gazeCalibrationArrangement = screenArrangementFingerprint()
             saved = true
-            log("gaze: calibrated on \(observations.count) points")
+            log("gaze: calibrated on \(references.count) readings across \(covered.count) displays")
         } else if save {
-            log("gaze: calibration failed to fit (\(observations.count) usable points)")
+            log("gaze: calibration incomplete, no face seen on \(expected.subtracting(covered).count) display(s)")
         } else {
             log("gaze: calibration cancelled")
         }

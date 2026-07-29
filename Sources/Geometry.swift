@@ -27,17 +27,6 @@ func screenContaining(_ axRect: CGRect) -> NSScreen {
     return NSScreen.main ?? NSScreen.screens[0]
 }
 
-/// Union of every display, in AX coordinates. The gaze layer maps into this
-/// rather than a single screen, which is what makes crossing displays fall out
-/// for free instead of needing its own gesture.
-func desktopFrame() -> CGRect {
-    var union = CGRect.null
-    for screen in NSScreen.screens {
-        union = union.union(flipRect(screen.frame))
-    }
-    return union.isNull ? .zero : union
-}
-
 /// Display containing the point, or the closest one if it lands in the gap
 /// between two displays or off the end of the arrangement.
 func nearestScreen(to point: CGPoint) -> NSScreen {

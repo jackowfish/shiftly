@@ -147,55 +147,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enableItem.state = settings.gazeEnabled ? .on : .off
 
         menu.addItem(.separator())
-        let explainer = settings.gazeEnabled
-            ? "Gestures start on the display you're looking at"
-            : "Off"
-        menu.addItem(withTitle: explainer, action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "Gestures start on the display you're looking at",
+                     action: nil,
+                     keyEquivalent: "").isEnabled = false
 
+        // A live readout instead of settings nobody could be expected to
+        // interpret. If this says the wrong display while the menu is open,
+        // recalibrating is the answer, and that's the only knob left.
         let status: String
-        if !settings.isGazeCalibrated {
-            status = "Not calibrated (using rough defaults)"
+        if !settings.gazeEnabled {
+            status = "Off"
+        } else if !settings.isGazeCalibrated {
+            status = "Needs calibration before it can do anything"
         } else if settings.gazeCalibrationArrangement != screenArrangementFingerprint() {
-            status = "Calibrated for a different display layout"
+            status = "Calibrated for a different display layout, recalibrate"
+        } else if let name = GazeFocus.shared.currentDisplayName {
+            status = "Looking at: \(name)"
+        } else if settings.gazeCameraAlwaysOn {
+            status = "Looking at: no face visible"
         } else {
-            status = "Calibrated"
+            status = "Ready (camera starts when you hold a modifier)"
         }
         menu.addItem(withTitle: status, action: nil, keyEquivalent: "").isEnabled = false
 
-        let calibrateItem = menu.addItem(withTitle: "Calibrate…",
+        let calibrateItem = menu.addItem(withTitle: settings.isGazeCalibrated ? "Recalibrate…" : "Calibrate…",
                                          action: #selector(calibrateGaze),
                                          keyEquivalent: "")
         calibrateItem.target = self
-        if settings.isGazeCalibrated {
-            let resetItem = menu.addItem(withTitle: "Reset Calibration",
-                                         action: #selector(resetGazeCalibration),
-                                         keyEquivalent: "")
-            resetItem.target = self
-        }
 
         menu.addItem(.separator())
-        // Calibration works out the signs by itself, so these are only live
-        // while running on the guessed defaults.
-        let calibrated = settings.isGazeCalibrated
-        let flipXItem = menu.addItem(withTitle: calibrated ? "Flip Horizontal (set by calibration)" : "Flip Horizontal",
-                                     action: #selector(toggleGazeFlipX),
-                                     keyEquivalent: "")
-        flipXItem.target = self
-        flipXItem.state = !calibrated && settings.gazeInvertX ? .on : .off
-        flipXItem.isEnabled = !calibrated
+        let cameraItem = menu.addItem(withTitle: "Camera", action: nil, keyEquivalent: "")
+        let cameraMenu = NSMenu()
+        cameraMenu.autoenablesItems = false
+        let alwaysItem = cameraMenu.addItem(withTitle: "Always on, while eye tracking is enabled",
+                                            action: #selector(pickGazeCamera(_:)),
+                                            keyEquivalent: "")
+        alwaysItem.target = self
+        alwaysItem.state = settings.gazeCameraAlwaysOn ? .on : .off
+        alwaysItem.representedObject = true
 
-        let flipYItem = menu.addItem(withTitle: calibrated ? "Flip Vertical (set by calibration)" : "Flip Vertical",
-                                     action: #selector(toggleGazeFlipY),
-                                     keyEquivalent: "")
-        flipYItem.target = self
-        flipYItem.state = !calibrated && settings.gazeInvertY ? .on : .off
-        flipYItem.isEnabled = !calibrated
+        let onDemandItem = cameraMenu.addItem(withTitle: "Only while holding a modifier",
+                                              action: #selector(pickGazeCamera(_:)),
+                                              keyEquivalent: "")
+        onDemandItem.target = self
+        onDemandItem.state = settings.gazeCameraAlwaysOn ? .off : .on
+        onDemandItem.representedObject = false
 
-        let warmItem = menu.addItem(withTitle: "Keep Camera Warm (light stays on)",
-                                    action: #selector(toggleGazeWarmCamera),
-                                    keyEquivalent: "")
-        warmItem.target = self
-        warmItem.state = settings.gazeKeepCameraWarm ? .on : .off
+        cameraMenu.addItem(.separator())
+        cameraMenu.addItem(withTitle: "On demand keeps the light off between gestures,",
+                           action: nil, keyEquivalent: "").isEnabled = false
+        cameraMenu.addItem(withTitle: "but a fast gesture can beat the camera starting.",
+                           action: nil, keyEquivalent: "").isEnabled = false
+        cameraItem.submenu = cameraMenu
 
         return menu
     }
@@ -246,24 +249,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleGazeFlipX() {
-        Settings.shared.gazeInvertX.toggle()
-        refreshMenu()
-    }
-
-    @objc private func toggleGazeFlipY() {
-        Settings.shared.gazeInvertY.toggle()
-        refreshMenu()
-    }
-
-    @objc private func toggleGazeWarmCamera() {
-        Settings.shared.gazeKeepCameraWarm.toggle()
+    @objc private func pickGazeCamera(_ sender: NSMenuItem) {
+        guard let alwaysOn = sender.representedObject as? Bool else { return }
+        Settings.shared.gazeCameraAlwaysOn = alwaysOn
         GazeFocus.shared.refresh()
-        refreshMenu()
-    }
-
-    @objc private func resetGazeCalibration() {
-        Settings.shared.clearGazeCalibration()
         refreshMenu()
     }
 
@@ -281,12 +270,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func offerCalibration() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
+        let seconds = Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count)
+            * (gazeCalibrationSettle + gazeCalibrationCollect))
         alert.messageText = "Calibrate eye tracking?"
         alert.informativeText = """
-            Uncalibrated, Shiftly guesses at how far you turn your head, so it \
-            will pick the right display but often the wrong zone on it. \
-            Calibration walks a dot around each screen and takes about \
-            \(Int(Double(NSScreen.screens.count * gazeCalibrationTargets.count) * (gazeCalibrationSettle + gazeCalibrationCollect))) seconds.
+            Eye tracking needs to learn what each of your displays looks like to \
+            the camera, so it does nothing until you calibrate. A dot walks \
+            around each screen and you look at it, which takes about \
+            \(seconds) seconds.
             """
         alert.addButton(withTitle: "Calibrate")
         alert.addButton(withTitle: "Later")

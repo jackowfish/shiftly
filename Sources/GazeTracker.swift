@@ -20,8 +20,6 @@ struct GazeSample {
     /// Pupil displacement inside the eye opening, about -1...1.
     var eyeX: Double
     var eyeY: Double
-
-    static let neutral = GazeSample(headX: 0, headY: gazeHeadYBias, eyeX: 0, eyeY: 0)
 }
 
 /// Front camera plus Vision face landmarks, on device. Runs only while
@@ -96,7 +94,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     /// Drops the camera after a short grace period, so a burst of sessions
     /// doesn't restart it repeatedly.
     func stopSoon() {
-        guard isRunning, !Settings.shared.gazeKeepCameraWarm else { return }
+        guard isRunning, !Settings.shared.gazeCameraAlwaysOn else { return }
         lingerTimer?.invalidate()
         lingerTimer = Timer.scheduledTimer(withTimeInterval: gazeCameraLinger, repeats: false) { [weak self] _ in
             self?.stop()

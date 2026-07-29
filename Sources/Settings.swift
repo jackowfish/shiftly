@@ -14,9 +14,7 @@ final class Settings {
             "overlayColor": "accent",
             "animationDuration": 0.08,
             "gazeEnabled": false,
-            "gazeInvertX": false,
-            "gazeInvertY": false,
-            "gazeKeepCameraWarm": false,
+            "gazeCameraAlwaysOn": true,
         ])
     }
 
@@ -54,25 +52,17 @@ final class Settings {
         set { defaults.set(newValue, forKey: "gazeEnabled") }
     }
 
-    var gazeInvertX: Bool {
-        get { defaults.bool(forKey: "gazeInvertX") }
-        set { defaults.set(newValue, forKey: "gazeInvertX") }
+    var gazeCameraAlwaysOn: Bool {
+        get { defaults.bool(forKey: "gazeCameraAlwaysOn") }
+        set { defaults.set(newValue, forKey: "gazeCameraAlwaysOn") }
     }
 
-    var gazeInvertY: Bool {
-        get { defaults.bool(forKey: "gazeInvertY") }
-        set { defaults.set(newValue, forKey: "gazeInvertY") }
-    }
-
-    var gazeKeepCameraWarm: Bool {
-        get { defaults.bool(forKey: "gazeKeepCameraWarm") }
-        set { defaults.set(newValue, forKey: "gazeKeepCameraWarm") }
-    }
-
-    /// Nil until the user calibrates, which is what the fallback map is for.
-    var gazeMap: GazeMap? {
-        get { GazeMap(storage: defaults.array(forKey: "gazeMap") as? [Double] ?? []) }
-        set { defaults.set(newValue?.storage, forKey: "gazeMap") }
+    /// Nil until calibrated. There's no fallback: without labelled readings
+    /// there's nothing to compare against, and guessing was what made the old
+    /// version need a Flip Horizontal control.
+    var gazeProfile: GazeProfile? {
+        get { GazeProfile(storage: defaults.array(forKey: "gazeProfile") as? [[Double]] ?? []) }
+        set { defaults.set(newValue?.storage, forKey: "gazeProfile") }
     }
 
     /// Display arrangement the calibration was fitted against. A mismatch
@@ -83,10 +73,10 @@ final class Settings {
         set { defaults.set(newValue, forKey: "gazeCalibrationArrangement") }
     }
 
-    var isGazeCalibrated: Bool { gazeMap != nil }
+    var isGazeCalibrated: Bool { gazeProfile != nil }
 
     func clearGazeCalibration() {
-        defaults.removeObject(forKey: "gazeMap")
+        defaults.removeObject(forKey: "gazeProfile")
         defaults.removeObject(forKey: "gazeCalibrationArrangement")
     }
 }

@@ -21,10 +21,6 @@ enum Layer: CaseIterable {
     }
 }
 
-/// The gaze layer's own key, kept out of `Layer` because it has no arrow
-/// bindings: it's a modifier-only chord watched by polling.
-let gazeSettingsKey = "gazeMods"
-
 enum Direction {
     case left, right, up, down
 }
@@ -66,29 +62,9 @@ let animationChoices: [(title: String, duration: Double)] = [
 
 // MARK: - Gaze
 
-/// Chords offered for the gaze layer. Plain ⌘ is missing on purpose: nothing
-/// commits this layer but the chord's own release, so a single common modifier
-/// would arm it during every Cmd+Tab.
-let gazeModifierChoices: [(title: String, mods: UInt32)] = [
-    ("⌃⌘", UInt32(controlKey | cmdKey)),
-    ("⌥⌘", UInt32(optionKey | cmdKey)),
-    ("⇧⌘", UInt32(shiftKey | cmdKey)),
-    ("⌃⌥", UInt32(controlKey | optionKey)),
-    ("⌃⌥⌘", UInt32(controlKey | optionKey | cmdKey)),
-    ("⇧⌥⌘", UInt32(shiftKey | optionKey | cmdKey)),
-    ("⌃⇧⌘", UInt32(controlKey | shiftKey | cmdKey)),
-]
-
-/// How the gaze layer carves up whichever display you're facing.
-let gazeGridChoices: [(title: String, columns: Int, rows: Int)] = [
-    ("Halves (2 × 1)", 2, 1),
-    ("Quarters (2 × 2)", 2, 2),
-    ("Sixths (3 × 2)", 3, 2),
-    ("Ninths (3 × 3)", 3, 3),
-]
-
 /// Weight on the pupil term. The head covers most of the angle to a side
-/// display; the eyes cover the part it didn't travel.
+/// display; the eyes cover the part it didn't travel, which on a wide desk is
+/// the part a single camera can't see the head make.
 let gazeHeadWeight = 0.7
 let gazeEyeWeight = 0.3
 
@@ -101,34 +77,27 @@ let gazeHeadYBias = 0.55
 let gazeEyeSpan = 0.70
 
 /// Frames are averaged into an exponential moving average before use. Raw
-/// landmarks jitter enough to strobe the overlay across a zone seam.
+/// landmarks jitter enough to flip the estimate across a display edge.
 let gazeSmoothing = 0.25
 
-/// A new zone has to win this many frames in a row, and the gaze point has to
-/// clear this much of the zone's own size, before the overlay follows. Crossing
-/// displays is held to a stricter version of both: a flicker there costs you a
-/// whole screen rather than a neighbouring rectangle.
-let gazeZoneHold = 3
-let gazeScreenHold = 6
-let gazeZoneDeadband: CGFloat = 0.12
-let gazeScreenDeadband: CGFloat = 0.06
+/// A display has to win this many frames in a row, and the gaze point has to
+/// land this far inside it, before it counts as the one being looked at.
+let gazeDisplayHold = 6
+let gazeDisplayDeadband: CGFloat = 0.06
 
-/// The chord poll runs whenever gaze is enabled. It's a flagsState query, not
-/// an event tap, so Secure Input can't blind it.
-///
-/// Arming takes a deliberate hold, because plenty of apps bind a key to the
-/// same chord and we can't see the keystroke to rule it out. ⌃⌘Space is down
-/// and up well inside 240ms; a gaze gesture isn't. The camera starts at the
-/// shorter count so its warmup runs during the dwell rather than after it.
-let gazeChordPoll: TimeInterval = 0.04
-let gazeChordPrewarm = 2
-let gazeChordDebounce = 6
+/// Modifier poll. A flagsState query, not an event tap, so Secure Input can't
+/// blind it. It only warms the camera: nothing is focused until an arrow lands.
+let gazePoll: TimeInterval = 0.04
 
-/// Dangling gaze sessions commit themselves after this long.
-let gazeTimeout: TimeInterval = 15
+/// How long the camera stays up after the modifiers go, when it isn't pinned
+/// warm. Long enough to cover a burst of window management, short enough that
+/// the light goes out when you stop.
+let gazeCameraLinger: TimeInterval = 20
 
-/// How long the camera stays up after a session ends, when it isn't pinned warm.
-let gazeCameraLinger: TimeInterval = 2.5
+/// A gaze estimate older than this is thrown away rather than acted on, so a
+/// gesture that beats the camera's warmup falls back to normal focus instead of
+/// retargeting off a stale reading.
+let gazeStaleAfter: TimeInterval = 1.0
 
 /// Calibration targets per display, as fractions of its frame.
 let gazeCalibrationTargets: [CGPoint] = [

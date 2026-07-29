@@ -2,12 +2,11 @@ import AppKit
 
 /// Linear map from head and eye geometry to a point on the global desktop.
 ///
-/// Two of these run at once. The head map ignores the pupil term and answers
-/// "which display", a tens-of-degrees question that head rotation alone gets
-/// right without calibration. The fine map adds the pupils and answers "which
-/// zone", a few-degrees question that needs them. Resolving in that order keeps
-/// eye noise from throwing a window onto the wrong screen: the worst it can do
-/// is pick the wrong rectangle on the right one.
+/// Only one question gets asked of it: which display. That's a tens-of-degrees
+/// signal, which is the forgiving end of what a webcam can resolve, and the
+/// hysteresis around it absorbs the rest. The pupil term still earns its place
+/// because a camera on the centre display can't see your head turn far enough
+/// to face an outer one; the eyes cover the angle the head didn't travel.
 struct GazeMap {
     /// x = xBias + xHead * headX + xEye * eyeX
     var xBias: Double
@@ -42,14 +41,14 @@ struct GazeMap {
     }
 
     /// Fallback for anyone who hasn't calibrated. The spans are a guess at an
-    /// average face at an average desk, so this gets you the right display and
-    /// roughly the right half of it, no better.
-    static func fallback(includeEyes: Bool) -> GazeMap {
+    /// average face at an average desk, which is usually enough to tell two or
+    /// three displays apart and not much more.
+    static func fallback() -> GazeMap {
         let desktop = desktopFrame()
         let halfWidth = desktop.width / 2
         let halfHeight = desktop.height / 2
-        let headShare = includeEyes ? gazeHeadWeight : 1.0
-        let eyeShare = includeEyes ? gazeEyeWeight : 0.0
+        let headShare = gazeHeadWeight
+        let eyeShare = gazeEyeWeight
 
         return GazeMap(
             xBias: Double(desktop.midX),
@@ -68,10 +67,10 @@ struct GazeObservation {
 }
 
 enum GazeFit {
-    /// Fits both maps from the same observations. Returns nil if the samples
-    /// are too degenerate to solve, which in practice means the face barely
-    /// moved between targets.
-    static func maps(from observations: [GazeObservation]) -> (head: GazeMap, fine: GazeMap)? {
+    /// Fits a map from the observations. Returns nil if the samples are too
+    /// degenerate to solve, which in practice means the face barely moved
+    /// between targets.
+    static func map(from observations: [GazeObservation]) -> GazeMap? {
         guard observations.count >= 4 else { return nil }
 
         let targetX = observations.map { Double($0.target.x) }
@@ -82,17 +81,12 @@ enum GazeFit {
         let eyeY = observations.map { $0.sample.eyeY }
         let ones = [Double](repeating: 1, count: observations.count)
 
-        guard let headXFit = solve(columns: [ones, headX], values: targetX),
-              let headYFit = solve(columns: [ones, headY], values: targetY),
-              let fineXFit = solve(columns: [ones, headX, eyeX], values: targetX),
-              let fineYFit = solve(columns: [ones, headY, eyeY], values: targetY)
+        guard let xFit = solve(columns: [ones, headX, eyeX], values: targetX),
+              let yFit = solve(columns: [ones, headY, eyeY], values: targetY)
         else { return nil }
 
-        let head = GazeMap(xBias: headXFit[0], xHead: headXFit[1], xEye: 0,
-                           yBias: headYFit[0], yHead: headYFit[1], yEye: 0)
-        let fine = GazeMap(xBias: fineXFit[0], xHead: fineXFit[1], xEye: fineXFit[2],
-                           yBias: fineYFit[0], yHead: fineYFit[1], yEye: fineYFit[2])
-        return (head, fine)
+        return GazeMap(xBias: xFit[0], xHead: xFit[1], xEye: xFit[2],
+                       yBias: yFit[0], yHead: yFit[1], yEye: yFit[2])
     }
 
     /// Ridge-regularized least squares. The ridge term keeps the solve stable

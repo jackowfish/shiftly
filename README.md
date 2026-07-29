@@ -29,29 +29,28 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 | Halves & quarters | Cmd | Left/Right snap to halves, Up maximizes, Down centers. Combine them for quarters - Left then Up and you get the top-left quarter. |
 | Thirds & sixths | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down will grab the upper or lower half of whatever slot you're in. |
 | Displays | Cmd+Shift | Sends the window to the display in that direction, keeping its relative size and position. |
-| Eye tracking | Ctrl+Cmd | Off by default. Hold the chord and the placement rectangle follows wherever you're looking, across every display. Release to place. |
 
 ## Eye Tracking
 
-Turn it on under Eye Tracking in the menu bar item. It uses the front camera with Vision's face landmarks, all on device, and nothing is recorded or sent anywhere. The camera runs only while the chord is held, so the green light tracks actual use (there's a "keep camera warm" option that trades that for a faster start).
+Off by default, under Eye Tracking in the menu bar item. It doesn't add a gesture. It changes which window the gestures above start on: hold your usual modifier, look at another display, and the first arrow press grabs the frontmost window over there instead of whatever was frontmost before.
 
-Carbon can't register a hot key with no key in it, so this layer watches the chord by polling `CGEventSource.flagsState` instead. That's a state query rather than an event stream, same as the release detection the keyboard layers already use, so Secure Input can't blind it either.
+Nothing steals focus on its own. The camera warms while a Shiftly modifier is down and the estimate updates in the background, but focus only moves when an arrow actually lands and a gesture begins. That's what makes it safe to key off Cmd, which you're also holding for Cmd+C and Cmd+Tab all day. Glancing at another monitor during those does nothing.
 
-Head rotation picks the display and head plus eyes pick the zone within it. Splitting it that way matters because the two are wildly different precision problems: which monitor you're facing is a tens-of-degrees signal that head pose alone gets right, while which sixth of that monitor is a few degrees and needs the pupils. Resolving in that order means eye noise can only cost you the wrong rectangle on the correct screen instead of throwing the window onto another display.
+On a single display it's inert, and it stays inert whenever you're already looking at the display that owns the focused window, so it only ever fires on a genuine cross-display switch.
 
-A single camera also can't see far enough to cover a wide desk on head pose alone. Turning far enough to face an outer monitor puts your face near the edge of what Vision will still track, and the pupil term is what makes up the angle your head didn't travel.
+### How it sees
+
+Front camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. Head rotation comes from nose position relative to the eye line rather than Vision's `yaw`, whose sign convention is undocumented and flips with mirroring.
+
+The only question asked of the estimate is which display, a tens-of-degrees signal that's the forgiving end of what a webcam resolves, with a six-frame hold and a deadband so a flicker at a screen edge can't retarget you. The pupils still matter because a camera on the centre display can't see your head turn far enough to face an outer monitor; the eyes make up the angle the head didn't travel.
+
+The camera runs while a modifier that could still become a gesture is held, and lingers 20 seconds after, so it's warm through a burst of window management and off when you stop. "Keep camera warm" pins it on for instant response at the cost of the green light. A gesture that beats the warmup falls back to normal focus rather than acting on a stale reading.
 
 ### Calibration
 
-Uncalibrated it runs on guessed constants for an average face at an average desk, which lands the right display and roughly the right half of it. Calibrate walks a dot around each screen for about a second and a half per stop and fits the mapping to you, which also settles your vertical baseline and the sign of the horizontal axis. If you skip it and the tracking comes out mirrored, Flip Horizontal fixes it; calibrating supersedes both flips.
+Uncalibrated it runs on guessed constants for an average face at an average desk, usually enough to tell two or three displays apart. Calibrate walks a dot around each screen for about a second and a half per stop and fits the mapping to you, which also settles your vertical baseline and the sign of the horizontal axis. If you skip it and it comes out mirrored, Flip Horizontal fixes it; calibrating supersedes both flips.
 
 Recalibrate after changing your display arrangement. The menu tells you when the saved calibration was fitted against a different one.
-
-### Notes
-
-The chord has to be held for about a quarter second before a session arms, so app shortcuts on the same chord (Ctrl+Cmd+Space and friends) don't trigger one on the way past. Anything that holds those modifiers longer will still arm it, so pick a chord you don't otherwise lean on. Picking a chord already owned by a keyboard layer moves that layer out of the way automatically.
-
-Gaze always previews into the placement rectangle, even with the placement window turned off for the keyboard layers, since driving a real window at frame rate fights every app that reflows on resize.
 
 ## Install
 

@@ -31,15 +31,16 @@ final class GestureEngine {
     private var slot: Int?
     private var sixth = 0
 
-    /// The gaze layer checks this so the two input paths can't both drive the
-    /// same window at once.
-    var isActive: Bool { active }
-
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
 
         if !active {
-            guard let focused = focusedWindow(), let current = frame(of: focused) else {
+            // With eye tracking on, the first press starts on whatever window
+            // sits on the display being looked at, falling back to the normal
+            // frontmost window when it's off, stale, or already the right one.
+            guard let focused = GazeFocus.shared.gazedWindow() ?? focusedWindow(),
+                  let current = frame(of: focused)
+            else {
                 log("no focused window (accessibility permission missing?)")
                 NSSound.beep()
                 return

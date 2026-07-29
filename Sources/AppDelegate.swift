@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log("launched, accessibility trusted: \(trusted)")
 
         installHotKeys()
-        GazeSession.shared.refresh()
+        GazeFocus.shared.refresh()
     }
 
     /// Squircle shift keycap, template-tinted for the menu bar.
@@ -148,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         let explainer = settings.gazeEnabled
-            ? "Hold \(gazeChordTitle()), look at a zone, release to place"
+            ? "Gestures start on the display you're looking at"
             : "Off"
         menu.addItem(withTitle: explainer, action: nil, keyEquivalent: "").isEnabled = false
 
@@ -174,31 +174,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        let chordItem = menu.addItem(withTitle: "Chord", action: nil, keyEquivalent: "")
-        let chordMenu = NSMenu()
-        for choice in gazeModifierChoices {
-            let item = chordMenu.addItem(withTitle: choice.title,
-                                         action: #selector(pickGazeModifier(_:)),
-                                         keyEquivalent: "")
-            item.target = self
-            item.state = choice.mods == settings.gazeModifiers ? .on : .off
-            item.representedObject = Int(choice.mods)
-        }
-        chordItem.submenu = chordMenu
-
-        let gridItem = menu.addItem(withTitle: "Zones", action: nil, keyEquivalent: "")
-        let gridMenu = NSMenu()
-        for choice in gazeGridChoices {
-            let item = gridMenu.addItem(withTitle: choice.title,
-                                        action: #selector(pickGazeGrid(_:)),
-                                        keyEquivalent: "")
-            item.target = self
-            item.state = choice.columns == settings.gazeColumns && choice.rows == settings.gazeRows ? .on : .off
-            item.representedObject = [choice.columns, choice.rows]
-        }
-        gridItem.submenu = gridMenu
-
-        menu.addItem(.separator())
         // Calibration works out the signs by itself, so these are only live
         // while running on the guessed defaults.
         let calibrated = settings.isGazeCalibrated
@@ -216,18 +191,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         flipYItem.state = !calibrated && settings.gazeInvertY ? .on : .off
         flipYItem.isEnabled = !calibrated
 
-        let warmItem = menu.addItem(withTitle: "Keep Camera Warm (faster, light stays on)",
+        let warmItem = menu.addItem(withTitle: "Keep Camera Warm (light stays on)",
                                     action: #selector(toggleGazeWarmCamera),
                                     keyEquivalent: "")
         warmItem.target = self
         warmItem.state = settings.gazeKeepCameraWarm ? .on : .off
 
         return menu
-    }
-
-    private func gazeChordTitle() -> String {
-        let mods = Settings.shared.gazeModifiers
-        return gazeModifierChoices.first { $0.mods == mods }?.title ?? "the chord"
     }
 
     private func refreshMenu() {
@@ -248,38 +218,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Settings.shared.setModifiers(previous, for: other)
         }
         Settings.shared.setModifiers(chosen, for: layer)
-        moveGazeChordOff(chosen)
 
         installHotKeys()
-        GazeSession.shared.refresh()
         refreshMenu()
     }
 
     // MARK: Gaze
 
-    /// The gaze chord arms on the modifiers alone, so sharing a combo with a
-    /// layer would arm it every time that layer is used. Push it somewhere free.
-    private func moveGazeChordOff(_ chord: UInt32) {
-        guard Settings.shared.gazeModifiers == chord else { return }
-        let taken = Layer.allCases.map { Settings.shared.modifiers(for: $0) }
-        if let free = gazeModifierChoices.first(where: { !taken.contains($0.mods) }) {
-            Settings.shared.gazeModifiers = free.mods
-        }
-    }
-
-    private func moveLayersOff(_ chord: UInt32) {
-        for layer in Layer.allCases where Settings.shared.modifiers(for: layer) == chord {
-            let taken = Layer.allCases.filter { $0 != layer }.map { Settings.shared.modifiers(for: $0) }
-            if let free = modifierChoices.first(where: { $0.mods != chord && !taken.contains($0.mods) }) {
-                Settings.shared.setModifiers(free.mods, for: layer)
-            }
-        }
-    }
-
     @objc private func toggleGaze() {
         if Settings.shared.gazeEnabled {
             Settings.shared.gazeEnabled = false
-            GazeSession.shared.refresh()
+            GazeFocus.shared.refresh()
             refreshMenu()
             return
         }
@@ -291,28 +240,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             Settings.shared.gazeEnabled = true
-            self.moveGazeChordOff(Settings.shared.gazeModifiers)
-            GazeSession.shared.refresh()
+            GazeFocus.shared.refresh()
             self.refreshMenu()
             if !Settings.shared.isGazeCalibrated { self.offerCalibration() }
         }
-    }
-
-    @objc private func pickGazeModifier(_ sender: NSMenuItem) {
-        guard let mods = sender.representedObject as? Int else { return }
-        let chosen = UInt32(mods)
-        Settings.shared.gazeModifiers = chosen
-        moveLayersOff(chosen)
-        installHotKeys()
-        GazeSession.shared.refresh()
-        refreshMenu()
-    }
-
-    @objc private func pickGazeGrid(_ sender: NSMenuItem) {
-        guard let grid = sender.representedObject as? [Int], grid.count == 2 else { return }
-        Settings.shared.gazeColumns = grid[0]
-        Settings.shared.gazeRows = grid[1]
-        refreshMenu()
     }
 
     @objc private func toggleGazeFlipX() {
@@ -327,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleGazeWarmCamera() {
         Settings.shared.gazeKeepCameraWarm.toggle()
-        GazeSession.shared.refresh()
+        GazeFocus.shared.refresh()
         refreshMenu()
     }
 

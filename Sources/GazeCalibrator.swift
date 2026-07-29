@@ -30,7 +30,7 @@ final class GazeCalibrator {
         running = true
         onFinish = completion
 
-        GazeSession.shared.suspend()
+        GazeFocus.shared.suspend()
         observations = []
         collected = []
         index = 0
@@ -110,9 +110,8 @@ final class GazeCalibrator {
         views = [:]
 
         var saved = false
-        if save, let maps = GazeFit.maps(from: observations) {
-            Settings.shared.gazeHeadMap = maps.head
-            Settings.shared.gazeFineMap = maps.fine
+        if save, let map = GazeFit.map(from: observations) {
+            Settings.shared.gazeMap = map
             Settings.shared.gazeCalibrationArrangement = screenArrangementFingerprint()
             saved = true
             log("gaze: calibrated on \(observations.count) points")
@@ -122,7 +121,7 @@ final class GazeCalibrator {
             log("gaze: calibration cancelled")
         }
 
-        GazeSession.shared.resume()
+        GazeFocus.shared.resume()
         onFinish?(saved)
         onFinish = nil
     }

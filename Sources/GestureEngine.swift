@@ -38,10 +38,16 @@ final class GestureEngine {
             // With eye tracking on, the first press starts on whatever window
             // sits on the display being looked at, falling back to the normal
             // frontmost window when it's off, stale, or already the right one.
-            guard let focused = GazeFocus.shared.gazedWindow() ?? focusedWindow(),
-                  let current = frame(of: focused)
-            else {
-                log("no focused window (accessibility permission missing?)")
+            let gazed = GazeFocus.shared.gazedWindow()
+            // Fall through to the normal window if the gaze pick turns out to
+            // have no readable frame, rather than failing the whole gesture.
+            var target = gazed
+            if target == nil || frame(of: target!) == nil {
+                if gazed != nil { debugLog("gaze pick had no readable frame, using frontmost") }
+                target = focusedWindow()
+            }
+            guard let focused = target, let current = frame(of: focused) else {
+                log("no window to act on (frontmost app exposes none, or accessibility is off)")
                 NSSound.beep()
                 return
             }

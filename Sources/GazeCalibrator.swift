@@ -18,6 +18,7 @@ final class GazeCalibrator {
     private var index = 0
     private var collecting = false
     private var stepTimer: Timer?
+    private var watchdog: Timer?
     private var keyMonitor: Any?
     private var running = false
     private var onFinish: ((Bool) -> Void)?
@@ -25,8 +26,16 @@ final class GazeCalibrator {
     private init() {}
 
     func start(completion: ((Bool) -> Void)? = nil) {
-        guard !running else { return }
-        guard !NSScreen.screens.isEmpty else { return }
+        guard !NSScreen.screens.isEmpty else {
+            log("gaze: calibration needs at least one display")
+            return
+        }
+        if running {
+            // A previous run that never reached finish() would otherwise make
+            // every future Calibrate click do nothing, silently.
+            log("gaze: calibration was already running, restarting it")
+            finish(save: false)
+        }
         running = true
         onFinish = completion
 
@@ -53,6 +62,18 @@ final class GazeCalibrator {
         }
         GazeTracker.shared.start()
 
+        // Nothing here should ever be able to hang without saying so. If the
+        // step chain stalls, this ends it and leaves a line in the log.
+        let budget = Double(targets.count) * (gazeCalibrationSettle + gazeCalibrationCollect) + 15
+        watchdog = scheduleTimer(after: budget) { [weak self] in
+            guard let self, self.running else { return }
+            log("gaze: calibration stalled at target \(self.index + 1)/\(self.targets.count)")
+            // Save rather than discard: finish() checks coverage anyway, so a
+            // stall on the last target still keeps a usable calibration.
+            self.finish(save: true)
+        }
+
+        log("gaze: calibration started, \(targets.count) targets across \(NSScreen.screens.count) displays")
         advance()
     }
 
@@ -69,13 +90,15 @@ final class GazeCalibrator {
         collecting = false
         collected = []
         show(target: target.point, progress: Double(index) / Double(targets.count))
+        debugLog("calibration target \(index + 1)/\(targets.count) on display \(target.display) at \(target.point)")
 
         // Settle first, then average a burst. Averaging across the settle would
         // bake in the travel from the previous dot.
-        stepTimer = Timer.scheduledTimer(withTimeInterval: gazeCalibrationSettle, repeats: false) { [weak self] _ in
-            guard let self else { return }
+        stepTimer = scheduleTimer(after: gazeCalibrationSettle) { [weak self] in
+            guard let self, self.running else { return }
             self.collecting = true
-            self.stepTimer = Timer.scheduledTimer(withTimeInterval: gazeCalibrationCollect, repeats: false) { _ in
+            self.stepTimer = scheduleTimer(after: gazeCalibrationCollect) { [weak self] in
+                guard let self, self.running else { return }
                 self.record(display: target.display)
             }
         }
@@ -83,7 +106,9 @@ final class GazeCalibrator {
 
     private func record(display: CGDirectDisplayID) {
         collecting = false
-        if !collected.isEmpty {
+        if collected.isEmpty {
+            log("gaze: no face seen while looking at display \(display)")
+        } else {
             let count = Double(collected.count)
             let mean = GazeSample(
                 headX: collected.reduce(0) { $0 + $1.headX } / count,
@@ -91,14 +116,19 @@ final class GazeCalibrator {
                 eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
                 eyeY: collected.reduce(0) { $0 + $1.eyeY } / count)
             references.append(GazeReference(display: display, sample: mean))
+            debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f",
+                            display, collected.count, mean.headX, mean.headY, mean.eyeX, mean.eyeY))
         }
         index += 1
         advance()
     }
 
     private func finish(save: Bool) {
+        guard running else { return }
         stepTimer?.invalidate()
         stepTimer = nil
+        watchdog?.invalidate()
+        watchdog = nil
         collecting = false
         running = false
 

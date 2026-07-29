@@ -33,6 +33,9 @@ final class GazeFocus {
     private var pending: CGDirectDisplayID?
     private var pendingFrames = 0
 
+    private var lastTraceAt: TimeInterval = 0
+    private var frameCount = 0
+
     private init() {}
 
     /// Display currently being looked at, for the menu to report.
@@ -121,6 +124,7 @@ final class GazeFocus {
     // MARK: Estimate
 
     private func handle(_ sample: GazeSample) {
+        traceSample(sample)
         // Freshness is about the camera still seeing a face, not about the
         // answer changing. Tying it to the answer meant that looking steadily at
         // one display, or hovering somewhere ambiguous, aged the estimate out
@@ -151,6 +155,28 @@ final class GazeFocus {
         pending = nil
         pendingFrames = 0
         log("gaze: looking at display \(candidate)")
+    }
+
+    /// Once-a-second trace of what the camera sees and how each display scores,
+    /// which is the readout for "why did it pick that one".
+    private func traceSample(_ sample: GazeSample) {
+        guard Settings.shared.debugLogging else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        frameCount += 1
+        guard now - lastTraceAt >= 1 else { return }
+        let rate = Double(frameCount) / max(now - lastTraceAt, 0.001)
+        lastTraceAt = now
+        frameCount = 0
+
+        var scores = "no profile"
+        if let profile = Settings.shared.gazeProfile {
+            scores = profile.ranking(for: sample)
+                .map { String(format: "%u:%.2f", $0.display, $0.distance) }
+                .joined(separator: " ")
+        }
+        debugLog(String(format: "gaze %.0ffps head %.3f/%.3f eye %.3f/%.3f | %@ | current %@",
+                        rate, sample.headX, sample.headY, sample.eyeX, sample.eyeY,
+                        scores, display.map(String.init) ?? "none"))
     }
 
     // MARK: Focus

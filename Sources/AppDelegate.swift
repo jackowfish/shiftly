@@ -122,8 +122,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       keyEquivalent: "")
         updateItem.target = self
         menu.addItem(.separator())
-        let logItem = menu.addItem(withTitle: "Open Log", action: #selector(openLog), keyEquivalent: "")
-        logItem.target = self
+        let logsItem = menu.addItem(withTitle: "Logs", action: nil, keyEquivalent: "")
+        let logsMenu = NSMenu()
+        logsMenu.autoenablesItems = false
+        let openLogItem = logsMenu.addItem(withTitle: "Open Log", action: #selector(openLog), keyEquivalent: "")
+        openLogItem.target = self
+        let revealLogItem = logsMenu.addItem(withTitle: "Reveal in Finder",
+                                             action: #selector(revealLog),
+                                             keyEquivalent: "")
+        revealLogItem.target = self
+        logsMenu.addItem(.separator())
+        let debugItem = logsMenu.addItem(withTitle: "Debug Logging",
+                                         action: #selector(toggleDebugLogging),
+                                         keyEquivalent: "")
+        debugItem.target = self
+        debugItem.state = Settings.shared.debugLogging ? .on : .off
+        logsMenu.addItem(withTitle: "Traces eye tracking in detail. Noisy, leave off",
+                         action: nil, keyEquivalent: "").isEnabled = false
+        logsMenu.addItem(withTitle: "unless something needs diagnosing.",
+                         action: nil, keyEquivalent: "").isEnabled = false
+        logsMenu.addItem(.separator())
+        let clearLogItem = logsMenu.addItem(withTitle: "Clear Log", action: #selector(clearLog), keyEquivalent: "")
+        clearLogItem.target = self
+        logsItem.submenu = logsMenu
+
         let settingsItem = menu.addItem(withTitle: "Accessibility Settings",
                                         action: #selector(openAccessibilitySettings),
                                         keyEquivalent: "")
@@ -338,6 +360,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openLog() {
         NSWorkspace.shared.open(logURL)
+    }
+
+    @objc private func revealLog() {
+        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+    }
+
+    @objc private func clearLog() {
+        try? Data().write(to: logURL)
+        log("log cleared")
+    }
+
+    @objc private func toggleDebugLogging() {
+        Settings.shared.debugLogging.toggle()
+        log("debug logging \(Settings.shared.debugLogging ? "on" : "off")")
+        refreshMenu()
     }
 
     @objc private func openAccessibilitySettings() {

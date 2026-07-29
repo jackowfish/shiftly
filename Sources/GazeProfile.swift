@@ -25,21 +25,25 @@ struct GazeProfile {
 
     var displays: Set<CGDirectDisplayID> { Set(references.map(\.display)) }
 
-    /// The display being looked at, or nil when it's too close to call.
-    func display(for sample: GazeSample) -> CGDirectDisplayID? {
+    /// Every display and how close its best reading is, nearest first.
+    func ranking(for sample: GazeSample) -> [(display: CGDirectDisplayID, distance: Double)] {
         var closest: [CGDirectDisplayID: Double] = [:]
         for reference in references {
             let measured = distance(sample, reference.sample)
             closest[reference.display] = min(closest[reference.display] ?? .greatestFiniteMagnitude, measured)
         }
+        return closest.sorted { $0.value < $1.value }.map { (display: $0.key, distance: $0.value) }
+    }
 
-        let ranked = closest.sorted { $0.value < $1.value }
+    /// The display being looked at, or nil when it's too close to call.
+    func display(for sample: GazeSample) -> CGDirectDisplayID? {
+        let ranked = ranking(for: sample)
         guard let winner = ranked.first else { return nil }
-        guard ranked.count > 1 else { return winner.key }
+        guard ranked.count > 1 else { return winner.display }
         // Has to win clearly. A coin flip between two displays should leave
         // focus alone rather than pick one.
-        guard winner.value <= ranked[1].value * gazeMargin else { return nil }
-        return winner.key
+        guard winner.distance <= ranked[1].distance * gazeMargin else { return nil }
+        return winner.display
     }
 
     /// Each axis is divided by its own plausible range first, so the pupil

@@ -15,6 +15,7 @@ final class Settings {
             "animationDuration": 0.08,
             "gazeEnabled": false,
             "gazeCameraAlwaysOn": true,
+            "debugLogging": false,
         ])
     }
 
@@ -43,6 +44,11 @@ final class Settings {
     var animationDuration: Double {
         get { defaults.double(forKey: "animationDuration") }
         set { defaults.set(newValue, forKey: "animationDuration") }
+    }
+
+    var debugLogging: Bool {
+        get { defaults.bool(forKey: "debugLogging") }
+        set { defaults.set(newValue, forKey: "debugLogging") }
     }
 
     // MARK: Gaze

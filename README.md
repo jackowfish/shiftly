@@ -32,19 +32,15 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 
 ## Eye Tracking (Beta)
 
-Off by default, under Eye Tracking (Beta) in the menu bar. It doesn't add a gesture, it changes which window the gestures above act on. Look at a window, hold your modifier, tap an arrow, and it grabs that one instead of whatever was frontmost. The window never has to be focused first.
+Off by default, under Eye Tracking (Beta) in the menu bar. It changes which window the gestures above act on. Look at a window, hold your modifier & tap an arrow, and it grabs that one instead of whatever you were last focused on.
 
-It picks the target once, when the gesture opens, so glancing around while you adjust won't move it. It also only ever picks the window on top at that spot, and it does nothing at all when the estimate doesn't land clearly inside something.
-
-Camera plus Vision's face landmarks, all on device, nothing recorded or sent anywhere. It reads your head angle from where your nose sits relative to your eye line, plus pupil offset and how open your eyelids are. The eyes matter because a webcam can't see your head turn far enough to face a monitor off to one side.
+I'm using whatever camera your mac is plugged into + Vision's face landmarks, all on device. It reads your head angle from where your nose sits relative to your eye line, plus pupil offset and how open your eyelids are. The eyes matter the most because a webcam can't see your head turn far enough to face a monitor off to one side (i.e. dual / triple monitor setups)
 
 ### Calibrating
 
-Required, and it takes about a minute. A dot walks a 3x3 grid on each screen and you look at it, twice: once with your head facing straight ahead the whole time moving only your eyes, then once looking naturally. Both passes are needed because your head absorbs angle your eyes would otherwise cover. Recalibrate if you change your display arrangement - the menu tells you when it thinks you should.
+Required, and it takes about a minute. Recalibrate if you change your display arrangement. Follow the instructions on screen - if it's not clear, the first calibration pass you should try to keep your head as still as possible while moving just your eyes across your monitors.
 
 ### How well it works
-
-Measured rather than guessed: two calibrations, fit on one and scored against the other. A point that doesn't land clearly inside a window does nothing instead of guessing, so there are three outcomes and only one of them costs you anything.
 
 | slot | acts right | acts wrong | does nothing |
 |---|---|---|---|
@@ -53,17 +49,9 @@ Measured rather than guessed: two calibrations, fit on one and scored against th
 | sixth of a 3440x1440 | 48% | 10% | 42% |
 | sixth of a 1692x3008 | 39% | 16% | 45% |
 
-So it's good for grabbing one of the two or three windows you actually have open, and it gets shaky once the slots get small. A slot only has to beat the other windows that are really there, which is an easier problem than a full tiling.
+It's currently good for grabbing one of the two or three windows you actually have open, and it gets shaky once the slots get small. A slot only has to beat the other windows that are really there, which is an easier problem than a full tiling.
 
-Webcam gaze is good to about 3-4° of visual angle, a couple hundred pixels at desk distance, and that's the real ceiling here rather than the calibration - IR eye trackers get under 1°.
-
-### When it's wrong
-
-Click the display you want and that outranks gaze for a couple of seconds. **Show Gaze Dot** draws where it thinks you're looking, outlines the window it would pick, and says why it picked it (or why it declined).
-
-Under Eye Tracking > Camera you can leave the camera always on, which is the default and keeps the estimate current, or start it only while you're holding a modifier, which keeps the light off at the cost of a fast gesture falling back to normal focus.
-
-Every calibration dumps its raw frames to `~/Library/Logs/Shiftly-gaze/`, and `tools/gaze_eval.py` replays them to score a change instead of guessing at it. Run it as `tools/gaze_eval.py a.csv b.csv --placement` to fit on one calibration and test on another, which is the only way to tell a real improvement from a good sitting position. The code comments cover what else was tried and why it didn't make it.
+Webcam gaze is good to about 3-4° of visual angle, a couple hundred pixels at desk distance.
 
 ## Install
 
@@ -80,7 +68,9 @@ The build signs with a `Shiftly Dev Signing` certificate if one exists in your k
 
 `build.sh` is what produces the app: SwiftPM can't assemble a `.app`, since that needs the Info.plist, the icon, the entitlements and a signature.
 
-There's a `Package.swift` anyway, purely so editors resolve the module. Without it SourceKit analyses each file alone and reports every cross-file symbol as missing, which buries real diagnostics under hundreds of fake ones. `swift build` type-checks everything and gives you a bare binary; it just isn't the shippable artifact.
+There's a `Package.swift` anyway, purely so editors resolve the module. Without it SourceKit analyses each file by itself and reports every cross-file symbol as missing. 
+
+`swift build` however works to type-checks everything and gives you a bare binary; it just isn't actually something you can publish.
 
 ## Layout
 

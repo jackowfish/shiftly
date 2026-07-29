@@ -34,19 +34,12 @@ final class GestureEngine {
     func handle(layer newLayer: Layer, direction: Direction, label: String) {
         var isFirstPress = false
 
-        // Hand off mid-gesture when you've looked at another display since the
-        // last press. Holding the modifier down across several windows is the
-        // normal way to use this, so the target can't be picked once when the
-        // gesture opens and then kept for the rest of it. Whatever was pending
-        // on the old window commits on the way out.
-        if active, let screen = previewScreen,
-           let handoff = GazeFocus.shared.gazedWindow(alreadyOn: displayID(of: screen)),
-           let rect = frame(of: handoff) {
-            commit()
-            begin(on: handoff, frame: rect, layer: newLayer)
-            isFirstPress = true
-        }
-
+        // Gaze picks the target once, when the gesture opens, and the rest of
+        // the gesture stays on it. An earlier version also re-asked on every
+        // press and handed off to whatever you'd since glanced at, committing
+        // the pending placement on the way out. It read as the window being
+        // yanked away mid-adjustment: you look up to check the result, and the
+        // next arrow is acting on something else.
         if !active {
             // With eye tracking on, the first press starts on whatever window
             // sits on the display being looked at, falling back to the normal

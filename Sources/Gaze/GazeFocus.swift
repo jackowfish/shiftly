@@ -222,13 +222,11 @@ final class GazeFocus {
     /// The window a gesture should start on, or nil to use the normal frontmost
     /// window. Focuses it as a side effect, which is the point.
     ///
-    /// `alreadyOn` is the display the gesture is currently working on. Passing
-    /// it lets a gesture already in flight ask the same question mid-run: when
-    /// you hold the modifier down and glance at another screen, the gesture
-    /// hands off to a window there instead of being stuck on the one it opened
-    /// with.
-    func gazedWindow(alreadyOn current: CGDirectDisplayID? = nil) -> AXUIElement? {
-        let owner = current ?? focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
+    /// Asked once per gesture, on the opening press. Only the display you aren't
+    /// already on can be claimed by the frontmost-window fallback, so glancing
+    /// around your current screen can't retarget you off a bad reading.
+    func gazedWindow() -> AXUIElement? {
+        let owner = focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
         guard let target = gazedTarget(alreadyOn: owner).pick else { return nil }
         // Already on it, so there's nothing to move focus to. Checked here
         // rather than inside gazedTarget, which answers where you're looking

@@ -17,9 +17,25 @@ struct GazeSample {
     /// Nose drop below the eye line, in inter-ocular widths. Tracks pitch, but
     /// carries a per-face baseline, so only changes in it mean anything.
     var headY: Double
-    /// Pupil displacement inside the eye opening, about -1...1.
+    /// Pupil displacement from the eye centre, in half eye-widths, about -1...1.
+    ///
+    /// Both axes divide by the eye's *width*. Vertical used to divide by the
+    /// eye's height, which is a denominator that moves with the thing being
+    /// measured: your lids close as you look down, so the box shrinks exactly
+    /// when the pupil drops, and the ratio flattens out the signal while
+    /// amplifying the noise in it. Eye width is set by the inner and outer
+    /// corners, which don't move when you look anywhere.
     var eyeX: Double
     var eyeY: Double
+    /// How open the lids are, as eye height over inter-ocular distance.
+    ///
+    /// A vertical signal that owes nothing to finding the pupil. Looking down
+    /// narrows the aperture and looking up widens it, and unlike pupil offset
+    /// it's measured across the whole eye contour rather than from one point
+    /// inside a region a third as tall as it is wide. Vertical is the axis that
+    /// costs us window-level accuracy, and this is a second, independent
+    /// measurement of it.
+    var lidY: Double
 }
 
 /// Front camera plus Vision face landmarks, on device. Runs only while
@@ -141,9 +157,20 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         }
 
         session.beginConfiguration()
-        // 720p is the sweet spot: enough pixels across the eye for the pupil
-        // term to mean something, few enough that Vision keeps up at 30fps.
-        session.sessionPreset = session.canSetSessionPreset(.hd1280x720) ? .hd1280x720 : .high
+        // Pupil offset is measured inside an eye maybe thirty pixels across at
+        // 720p, and the vertical half of that is where window-level accuracy is
+        // lost. 1080p is 1.5x the pixels across the same eye, which is the one
+        // improvement available that costs no calibration time.
+        //
+        // It does cost frame rate, since Vision then works over 2.25x the area.
+        // The fps is in the debug trace for exactly this reason: the decision
+        // takes a median of the newest three frames, so a halved rate doubles
+        // the age of the oldest of them.
+        for preset in [AVCaptureSession.Preset.hd1920x1080, .hd1280x720, .high]
+        where session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
+            break
+        }
         guard session.canAddInput(input) else {
             session.commitConfiguration()
             log("gaze: could not add camera input")
@@ -230,21 +257,31 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         var eyeX = 0.0
         var eyeY = 0.0
         var eyeCount = 0.0
+        // Aperture is measured whether or not the pupil was found, since it
+        // needs only the eye contour. A blink that loses the pupil still says
+        // something about where you're looking.
+        var lidY = 0.0
+        var lidCount = 0.0
         for (region, pupil) in [(leftEye, landmarks.leftPupil), (rightEye, landmarks.rightPupil)] {
-            guard let pupil, let point = pupil.normalizedPoints.first else { continue }
             let box = bounds(of: region)
             guard box.width > 0.001, box.height > 0.001 else { continue }
+            lidY += Double(box.height / interOcular)
+            lidCount += 1
+
+            guard let pupil, let point = pupil.normalizedPoints.first else { continue }
             eyeX += flip * Double((CGFloat(point.x) - box.midX) / (box.width / 2))
-            // Vision's y is up, the desktop's is down.
-            eyeY += Double((box.midY - CGFloat(point.y)) / (box.height / 2))
+            // Vision's y is up, the desktop's is down. Divided by width, not
+            // height: see the note on GazeSample.eyeY.
+            eyeY += Double((box.midY - CGFloat(point.y)) / (box.width / 2))
             eyeCount += 1
         }
         if eyeCount > 0 {
             eyeX = clamp(eyeX / eyeCount, to: 1.5)
             eyeY = clamp(eyeY / eyeCount, to: 1.5)
         }
+        if lidCount > 0 { lidY /= lidCount }
 
-        return GazeSample(headX: headX, headY: headY, eyeX: eyeX, eyeY: eyeY)
+        return GazeSample(headX: headX, headY: headY, eyeX: eyeX, eyeY: eyeY, lidY: lidY)
     }
 
     private func centroid(_ region: VNFaceLandmarkRegion2D) -> CGPoint {

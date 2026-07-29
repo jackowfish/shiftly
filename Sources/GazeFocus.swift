@@ -164,7 +164,17 @@ final class GazeFocus {
             return sorted[sorted.count / 2]
         }
         return GazeSample(headX: median(\.headX), headY: median(\.headY),
-                          eyeX: median(\.eyeX), eyeY: median(\.eyeY))
+                          eyeX: median(\.eyeX), eyeY: median(\.eyeY), lidY: median(\.lidY))
+    }
+
+    /// Where on the desktop the estimate points, or nil when the calibration
+    /// predates placement and can only name a display.
+    func gazedPoint() -> CGPoint? {
+        guard Settings.shared.gazeEnabled,
+              let profile = Settings.shared.gazeProfile,
+              let reading = reading()
+        else { return nil }
+        return profile.point(for: reading)
     }
 
     /// Once-a-second trace of what the camera sees and how each display scores,
@@ -219,44 +229,90 @@ final class GazeFocus {
     /// hands off to a window there instead of being stuck on the one it opened
     /// with.
     func gazedWindow(alreadyOn current: CGDirectDisplayID? = nil) -> AXUIElement? {
-        guard let target = gazedDisplay() else { return nil }
-        guard let screen = NSScreen.screens.first(where: { displayID(of: $0) == target }) else { return nil }
-
-        // Already looking at the display that owns the window in play: leave it
-        // alone. Otherwise every gesture would raise whatever is frontmost there,
-        // which is not what "focus the screen I'm looking at" means.
         let owner = current ?? focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
-        if owner == target { return nil }
+        guard let target = gazedTarget(alreadyOn: owner) else { return nil }
 
         let started = ProcessInfo.processInfo.systemUptime
-        guard let found = frontmostWindow(on: screen) else {
-            log("gaze: no window on the display being looked at")
+        // AX is resolved for the winner only. Asking every window on the screen
+        // would mean a synchronous round trip per app, on the keypress.
+        guard let element = axWindow(pid: target.pid, matching: target.bounds) else {
+            log("gaze: could not reach the window being looked at")
             return nil
         }
-        focus(found.element, pid: found.pid)
+        focus(element, pid: target.pid)
         // Timed because this is the one part of the press that isn't ours: it
         // waits on other apps to answer, and that's where a slow gesture would
         // now be coming from.
         let camera = ProcessInfo.processInfo.systemUptime - GazeTracker.shared.lastFaceAt
-        debugLog(String(format: "gaze retarget to display %u: newest frame %.0fms old, window lookup %.0fms",
-                        target, camera * 1000,
+        debugLog(String(format: "gaze retarget to display %u %@: newest frame %.0fms old, window lookup %.0fms",
+                        target.display, target.reason, camera * 1000,
                         (ProcessInfo.processInfo.systemUptime - started) * 1000))
-        return found.element
+        return element
     }
 
-    /// Frontmost normal window whose centre sits on `screen`.
+    /// The window a gesture would act on, without touching focus.
+    ///
+    /// Split out from `gazedWindow` so the debug overlay can draw the answer.
+    /// Anything that shows you what the tracker is about to do has to be able to
+    /// ask without doing it.
+    ///
+    /// Two ways to land on a window. If the calibration can place the dot and
+    /// the dot is inside a window, that window wins, which is what makes this
+    /// work between two windows on one screen. Failing that, changing displays
+    /// still takes whatever is frontmost over there, which is the older
+    /// behaviour and the one that needs no placement fit.
+    func gazedTarget(alreadyOn owner: CGDirectDisplayID? = nil)
+        -> (display: CGDirectDisplayID, pid: pid_t, bounds: CGRect, reason: String)? {
+        guard let display = gazedDisplay(),
+              let screen = NSScreen.screens.first(where: { displayID(of: $0) == display })
+        else { return nil }
+
+        let candidates = windows(on: screen)
+        guard !candidates.isEmpty else { return nil }
+        let focused = focusedWindow().flatMap(frame(of:))
+
+        var picked: (pid: pid_t, bounds: CGRect)?
+        var reason = "frontmost"
+        if let point = gazedPoint() {
+            // Front to back, so the visible window wins where two overlap.
+            // Inset because a dot near a shared edge is as likely to belong to
+            // the neighbour, and a gesture that flips between two windows as
+            // you look along the seam is worse than one that does nothing.
+            picked = candidates.first { window in
+                window.bounds.insetBy(dx: min(gazeWindowInset, window.bounds.width * 0.2),
+                                      dy: min(gazeWindowInset, window.bounds.height * 0.2))
+                    .contains(point)
+            }
+            if picked != nil { reason = "by dot" }
+        }
+        if picked == nil {
+            // Nothing clearly under the estimate. A different display still
+            // means the frontmost window there; the same display means leave
+            // whatever you're working on alone.
+            guard owner != display else { return nil }
+            picked = candidates.first
+        }
+
+        guard let chosen = picked else { return nil }
+        // Already on it, so there's nothing to move focus to.
+        if let focused, nearlyEqual(focused, chosen.bounds) { return nil }
+        return (display: display, pid: chosen.pid, bounds: chosen.bounds, reason: reason)
+    }
+
+    /// Normal windows whose centre sits on `screen`, front to back.
     ///
     /// `CGWindowListCopyWindowInfo` returns front to back, and the keys used
     /// here (owner, bounds, layer) come back without Screen Recording
     /// permission. Only window *names* are gated, and those aren't needed.
-    private func frontmostWindow(on screen: NSScreen) -> (element: AXUIElement, pid: pid_t)? {
+    private func windows(on screen: NSScreen) -> [(pid: pid_t, bounds: CGRect)] {
         let area = flipRect(screen.frame)
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return nil
+            return []
         }
 
         let ownPid = ProcessInfo.processInfo.processIdentifier
+        var out: [(pid: pid_t, bounds: CGRect)] = []
         for info in list {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPid,
@@ -266,11 +322,14 @@ final class GazeFocus {
             // Skip palettes and stray chrome that would be a strange thing to snap.
             guard bounds.width > 120, bounds.height > 120 else { continue }
             guard area.contains(CGPoint(x: bounds.midX, y: bounds.midY)) else { continue }
-            if let element = axWindow(pid: pid, matching: bounds) {
-                return (element, pid)
-            }
+            out.append((pid: pid, bounds: bounds))
         }
-        return nil
+        return out
+    }
+
+    private func nearlyEqual(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 4 && abs(a.minY - b.minY) <= 4
+            && abs(a.width - b.width) <= 4 && abs(a.height - b.height) <= 4
     }
 
     private func axWindow(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
@@ -287,10 +346,7 @@ final class GazeFocus {
 
         for window in value as! [AXUIElement] {
             guard let rect = frame(of: window) else { continue }
-            if abs(rect.minX - bounds.minX) <= 4, abs(rect.minY - bounds.minY) <= 4,
-               abs(rect.width - bounds.width) <= 4, abs(rect.height - bounds.height) <= 4 {
-                return window
-            }
+            if nearlyEqual(rect, bounds) { return window }
         }
         return nil
     }

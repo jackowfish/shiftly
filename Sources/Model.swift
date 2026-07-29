@@ -90,6 +90,17 @@ let gazeDecisionWindow: TimeInterval = 0.4
 /// Frames kept for the press-time decision to draw from.
 let gazeHistoryWindow: TimeInterval = 1.0
 
+/// How far inside a window the estimate has to land before that window is taken
+/// as the one you mean, capped at a fifth of the window so small ones stay
+/// reachable.
+///
+/// Gaze from a webcam is good to a few degrees, which is a couple of hundred
+/// pixels at desk distance, so a dot near the seam between two windows carries
+/// no real opinion about which side it's on. Requiring it to be properly inside
+/// trades a few "did nothing" presses for not flipping between two windows as
+/// you read along their shared edge.
+let gazeWindowInset: CGFloat = 80
+
 /// Clicking a display says plainly which screen you mean, so it outranks gaze
 /// for a moment afterwards. The escape hatch for a reading that disagrees with
 /// you: click the screen you want and it does what you said.
@@ -141,10 +152,31 @@ let gazeStatusRefresh: TimeInterval = 0.2
 enum GazeCalibrationStyle: CaseIterable {
     case still, free
 
+    /// Shown throughout the pass, including under the count-in.
+    ///
+    /// The still pass says "for this whole pass" deliberately. Holding your head
+    /// still only within one screen and then re-aiming it at the next makes the
+    /// pass a second copy of the free one, and the eye-only extreme it exists to
+    /// record never gets recorded. Reaching as far as is comfortable rather than
+    /// straining is part of it too: a reading taken at the limit of how far your
+    /// eyes will go is one you'll never reproduce while actually working.
     var hint: String {
         switch self {
-        case .still: return "Keep your head still. Move only your eyes to the dot."
-        case .free: return "Now look at the dot naturally, turning your head."
+        case .still:
+            return "Keep your head facing straight ahead for this whole pass, "
+                + "even when the dot moves to another screen. Move only your eyes, as far as is comfortable."
+        case .free:
+            return "Now look at the dot naturally, turning your head as much as you like."
+        }
+    }
+
+    /// Heading over the count-in. The still pass must not say "look at" the way
+    /// the free pass does, because that reads as an instruction to turn towards
+    /// the screen, which is the one thing this pass is trying to exclude.
+    func countdownTitle(for display: String) -> String {
+        switch self {
+        case .still: return "Eyes only to \(display), head stays put"
+        case .free: return "Look at \(display)"
         }
     }
 
@@ -156,26 +188,21 @@ enum GazeCalibrationStyle: CaseIterable {
     }
 }
 
-/// Targets per display per pass, as fractions of its frame: a 3x2 grid.
+/// Targets per display per pass, as fractions of its frame: a 3x3 grid.
 ///
-/// It was four corners, which is enough to fit the dot from its own axis alone
-/// but not enough to also fit the cross terms — how vertical gaze shifts the
-/// horizontal reading and back. Measured against held-out dots, adding those
-/// terms at four corners per pass made the fit worse on one display and better
-/// on the other, which is what overfitting looks like. Six carries the extra
-/// parameters, at the cost of about twelve seconds.
+/// It was four corners, which is enough to fit each axis of the dot from its own
+/// terms but not enough to also fit the cross terms, nor to see any curvature.
+/// Two rows in particular means the vertical fit is a straight line through two
+/// clusters, with no third level able to contradict it.
 ///
-/// Three columns rather than three rows because the wide axis is where a single
-/// bad reading does the most damage: on an ultrawide the horizontal fit is
-/// stretched over three thousand pixels, and an interior column gives it
-/// something to hold onto in the middle.
+/// That mattered once the target became picking a window rather than a display.
+/// Measured on a real capture, four corners put the dot in the right half of a
+/// 3440x1440 screen 96.9% of the time horizontally and 60.3% vertically, and
+/// 60.3% is a coin flip. Nine dots is about twenty seconds more.
 let gazeCalibrationTargets: [CGPoint] = [
-    CGPoint(x: 0.12, y: 0.16),
-    CGPoint(x: 0.50, y: 0.16),
-    CGPoint(x: 0.88, y: 0.16),
-    CGPoint(x: 0.12, y: 0.84),
-    CGPoint(x: 0.50, y: 0.84),
-    CGPoint(x: 0.88, y: 0.84),
+    CGPoint(x: 0.12, y: 0.14), CGPoint(x: 0.50, y: 0.14), CGPoint(x: 0.88, y: 0.14),
+    CGPoint(x: 0.12, y: 0.50), CGPoint(x: 0.50, y: 0.50), CGPoint(x: 0.88, y: 0.50),
+    CGPoint(x: 0.12, y: 0.86), CGPoint(x: 0.50, y: 0.86), CGPoint(x: 0.88, y: 0.86),
 ]
 
 /// Readings a display needs before the dot's placement fit takes on the
@@ -183,8 +210,12 @@ let gazeCalibrationTargets: [CGPoint] = [
 /// recorded at four dots per pass keeps the shape it was measured to be best at.
 let gazePlacementCoupledDots = 10
 
-let gazeCalibrationSettle: TimeInterval = 0.9
-let gazeCalibrationCollect: TimeInterval = 0.7
+/// Shortened alongside the move to nine dots, so more of the budget goes on
+/// covering the screen and less on waiting at each spot. A saccade lands and
+/// settles well inside 0.7s, and 0.6s of collection is still eighteen frames to
+/// average.
+let gazeCalibrationSettle: TimeInterval = 0.7
+let gazeCalibrationCollect: TimeInterval = 0.6
 
 /// Counted in on each display before its run of dots starts.
 ///

@@ -29,9 +29,29 @@ import os
 import statistics as st
 import sys
 
-AXES = ["headX", "headY", "eyeX", "eyeY"]
+AXES = ["headX", "headY", "eyeX", "eyeY", "lidY"]
 CAPTURES = os.path.expanduser("~/Library/Logs/Shiftly-gaze")
 FLOOR = 0.02
+
+# Index of each axis within a row's "x", for the fits that care which is which.
+HEAD_X, HEAD_Y, EYE_X, EYE_Y, LID_Y = range(len(AXES))
+HORIZONTAL = [HEAD_X, EYE_X]
+VERTICAL = [HEAD_Y, EYE_Y, LID_Y]
+
+# Readings per display before the placement fit takes on the cross-axis terms.
+# Matches gazePlacementCoupledDots in Model.swift.
+COUPLED_DOTS = 10
+
+
+def version(path):
+    """Capture format from the header. 1 has no lidY and scales eyeY differently."""
+    with open(path) as handle:
+        for line in handle:
+            if not line.startswith("#"):
+                return 1
+            if "shiftly gaze capture v" in line:
+                return int(line.strip().rsplit("v", 1)[1])
+    return 1
 
 
 def load(path):
@@ -46,7 +66,10 @@ def load(path):
                 "display": int(row["display"]),
                 "point": (float(row["targetX"]), float(row["targetY"])),
                 "style": row.get("style", "?"),
-                "x": [float(row[a]) for a in AXES],
+                # A v1 capture has no lidY column and reports eyeY against a
+                # different denominator. Zero-filling keeps it loadable for the
+                # display-level scores, which don't depend on either.
+                "x": [float(row[a]) if a in row else 0.0 for a in AXES],
             }
         )
     if not rows:
@@ -81,20 +104,20 @@ def train(rows):
     refs = [
         {
             "display": g[0]["display"],
-            "x": [st.mean(r["x"][i] for r in g) for i in range(4)],
+            "x": [st.mean(r["x"][i] for r in g) for i in range(len(AXES))],
         }
         for g in groups
     ]
 
     # How much an axis wobbles while a single dot is held: measurement noise.
-    jitter = [st.median([spread([r["x"][i] for r in g]) for g in groups]) for i in range(4)]
+    jitter = [st.median([spread([r["x"][i] for r in g]) for g in groups]) for i in range(len(AXES))]
 
     per_display = {}
     for ref in refs:
         per_display.setdefault(ref["display"], []).append(ref["x"])
 
     between, within = [], []
-    for i in range(4):
+    for i in range(len(AXES)):
         means = [st.mean(v[i] for v in vs) for vs in per_display.values()]
         between.append(spread(means))
         within.append(st.mean([spread([v[i] for v in vs]) for vs in per_display.values()]))
@@ -108,12 +131,16 @@ def train(rows):
         # What shipped first: scaled by how much an axis varies across one
         # display's dots, which counts "tracking where on the screen you look"
         # as noise and buries the pupil terms.
-        "spread": norm([between[i] / max(within[i], FLOOR) for i in range(4)]),
+        "spread": norm([between[i] / max(within[i], FLOOR) for i in range(len(AXES))]),
         # Scaled by per-frame jitter instead.
-        "jitter": norm([between[i] / max(jitter[i], FLOOR) for i in range(4)]),
-        "equal": [1.0, 1.0, 1.0, 1.0],
-        "eyes_only": [0.0, 0.0, 1.0, 1.0],
-        "head_only": [1.0, 1.0, 0.0, 0.0],
+        "jitter": norm([between[i] / max(jitter[i], FLOOR) for i in range(len(AXES))]),
+        "equal": [1.0] * len(AXES),
+        "eyes_only": [0.0, 0.0, 1.0, 1.0, 1.0],
+        "head_only": [1.0, 1.0, 0.0, 0.0, 0.0],
+        # Jitter-scaled but with the eyelid term switched off, which is how we
+        # find out whether adding it bought anything or just added a dimension.
+        "no_lid": norm([between[i] / max(jitter[i], FLOOR) if i != LID_Y else 0.0
+                        for i in range(len(AXES))]),
     }
 
 
@@ -125,14 +152,14 @@ def classify(model, weights, x, margin, centroid=False):
         for ref in model["refs"]:
             groups.setdefault(ref["display"], []).append(ref["x"])
         pool = [
-            {"display": d, "x": [st.mean(v[i] for v in vs) for i in range(4)]}
+            {"display": d, "x": [st.mean(v[i] for v in vs) for i in range(len(AXES))]}
             for d, vs in groups.items()
         ]
     else:
         pool = model["refs"]
 
     for ref in pool:
-        d = math.sqrt(sum(((x[i] - ref["x"][i]) * weights[i]) ** 2 for i in range(4)))
+        d = math.sqrt(sum(((x[i] - ref["x"][i]) * weights[i]) ** 2 for i in range(len(AXES))))
         key = ref["display"]
         if key not in best or d < best[key]:
             best[key] = d
@@ -144,7 +171,7 @@ def classify(model, weights, x, margin, centroid=False):
 
 
 def median_of(window):
-    return [st.median([w[i] for w in window]) for i in range(4)]
+    return [st.median([w[i] for w in window]) for i in range(len(AXES))]
 
 
 def score(model, weights, rows, margin, frames, centroid):
@@ -213,16 +240,74 @@ def fit_ls(features, values):
     return [m[i][terms] for i in range(terms)]
 
 
-# Readings per display before the placement fit takes on the cross-axis terms.
-# Matches gazePlacementCoupledDots in Model.swift.
-COUPLED_DOTS = 10
-
-
 def coverage(rows_):
     return {(r["display"], r["style"]) for r in rows_}
 
 
-def placement_report(train_rows, test_rows, weights):
+def arrangement(path):
+    """Display frames from the capture's '# arrangement=' header, id -> rect."""
+    out = {}
+    with open(path) as handle:
+        for line in handle:
+            if not line.startswith("#"):
+                break
+            if "arrangement=" not in line:
+                continue
+            for part in line.split("arrangement=", 1)[1].strip().split("|"):
+                identifier, rect = part.split(":")
+                out[int(identifier)] = tuple(float(v) for v in rect.split(","))
+    return out
+
+
+# The layouts Shiftly can snap to, as (name, columns, rows). Sixths is the
+# demanding one: on a 3440x1440 ultrawide its tiles are 1147x720.
+LAYOUTS = [("halves", 2, 1), ("thirds", 3, 1), ("quarters", 2, 2), ("sixths", 3, 2)]
+
+
+def tile_of(point, rect, cols, rows):
+    x, y, w, h = rect
+    col = min(int((point[0] - x) / w * cols), cols - 1)
+    row = min(int((point[1] - y) / h * rows), rows - 1)
+    return max(col, 0), max(row, 0)
+
+
+def tile_report(plan, predict, frames):
+    """Whether the dot lands in the right tile, which is what window picking needs.
+
+    Reported per axis as well as combined, because they fail for different
+    reasons and at different rates: the horizontal fit has a whole ultrawide to
+    spread its error over, while the vertical one is measuring pupil position
+    inside an eye opening a third as tall as it is wide.
+    """
+    if not frames:
+        return
+    print("\ntile hit rate — would the dot pick the right window slot")
+    print(f"{'layout':<10} {'display':>8} {'tile px':>12} {'column':>8} {'row':>8} {'both':>8}")
+    for name, cols, rows_ in LAYOUTS:
+        for display in sorted(frames):
+            got_col = got_row = both = total = 0
+            for fitted, chunk in plan:
+                for row in chunk:
+                    if row["display"] != display:
+                        continue
+                    predicted = predict(fitted, row["display"], row["x"])
+                    if predicted is None:
+                        continue
+                    want = tile_of(row["point"], frames[display], cols, rows_)
+                    have = tile_of(predicted, frames[display], cols, rows_)
+                    got_col += have[0] == want[0]
+                    got_row += have[1] == want[1]
+                    both += have == want
+                    total += 1
+            if not total:
+                continue
+            _, _, w, h = frames[display]
+            size = f"{w / cols:.0f}x{h / rows_:.0f}"
+            print(f"{name:<10} {display:>8} {size:>12} {got_col / total:>7.1%} "
+                  f"{got_row / total:>7.1%} {both / total:>7.1%}")
+
+
+def placement_report(train_rows, test_rows, weights, frames):
     """How far the drawn dot lands from where you were actually looking.
 
     Reported alongside the spread of what it predicts, because the failure this
@@ -232,7 +317,7 @@ def placement_report(train_rows, test_rows, weights):
     """
     same = train_rows is test_rows
     groups = bursts(train_rows)
-    summary = [([st.mean(r["x"][i] for r in g) for i in range(4)], g[0]["point"], g[0]["display"])
+    summary = [([st.mean(r["x"][i] for r in g) for i in range(len(AXES))], g[0]["point"], g[0]["display"])
                for g in groups]
 
     def build(exclude):
@@ -247,16 +332,29 @@ def placement_report(train_rows, test_rows, weights):
             if i == exclude:
                 continue
             idw_refs.setdefault(display, []).append((x, point))
+        no_lid = {}
         for display, pts in idw_refs.items():
             # Own axis first, then the cross terms once there are dots enough to
             # tell a real correction from noise. Same order and gate as the app.
-            axes = [0, 2, 1, 3] if len(pts) >= COUPLED_DOTS else [0, 2]      # headX, eyeX (+ headY, eyeY)
-            axes_y = [1, 3, 0, 2] if len(pts) >= COUPLED_DOTS else [1, 3]    # headY, eyeY (+ headX, eyeX)
-            fx = fit_ls([[x[i] for i in axes] for x, _ in pts], [p[0] for _, p in pts])
-            fy = fit_ls([[x[i] for i in axes_y] for x, _ in pts], [p[1] for _, p in pts])
-            if fx and fy:
-                linear[display] = ((axes, fx), (axes_y, fy))
-        return idw_refs, linear
+            coupled = len(pts) >= COUPLED_DOTS
+
+            def solve(own, cross, index, drop=()):
+                axes = [a for a in (own + cross if coupled else own) if a not in drop]
+                got = fit_ls([[x[i] for i in axes] for x, _ in pts],
+                             [p[index] for _, p in pts])
+                return (axes, got) if got else None
+
+            full = (solve(HORIZONTAL, VERTICAL, 0), solve(VERTICAL, HORIZONTAL, 1))
+            if all(full):
+                linear[display] = full
+            # The same fit with the eyelid term removed, so the placement table
+            # can say whether it earned its parameter on the axis it was added
+            # for rather than only whether the whole thing got better.
+            bare = (solve(HORIZONTAL, VERTICAL, 0, drop=(LID_Y,)),
+                    solve(VERTICAL, HORIZONTAL, 1, drop=(LID_Y,)))
+            if all(bare):
+                no_lid[display] = bare
+        return idw_refs, linear, no_lid
 
     def idw(fitted, display, x):
         refs = fitted[0].get(display)
@@ -264,17 +362,22 @@ def placement_report(train_rows, test_rows, weights):
             return None
         acc_x = acc_y = total = 0.0
         for ref, point in refs:
-            d = math.sqrt(sum(((x[i] - ref[i]) * weights[i]) ** 2 for i in range(4)))
+            d = math.sqrt(sum(((x[i] - ref[i]) * weights[i]) ** 2 for i in range(len(AXES))))
             w = 1 / (d * d + 0.05)
             acc_x += w * point[0]; acc_y += w * point[1]; total += w
         return (acc_x / total, acc_y / total)
 
-    def lin(fitted, display, x):
-        if display not in fitted[1]:
-            return None
-        def apply(axes, c):
-            return c[0] + sum(c[i + 1] * x[axis] for i, axis in enumerate(axes))
-        return tuple(apply(axes, c) for axes, c in fitted[1][display])
+    def predict_with(slot):
+        def go(fitted, display, x):
+            if display not in fitted[slot]:
+                return None
+            def apply(axes, c):
+                return c[0] + sum(c[i + 1] * x[axis] for i, axis in enumerate(axes))
+            return tuple(apply(axes, c) for axes, c in fitted[slot][display])
+        return go
+
+    lin = predict_with(1)
+    bare = predict_with(2)
 
     # Which fit each test frame is scored against: its own dot held out when
     # train and test are the same capture, otherwise just the one fit.
@@ -288,7 +391,7 @@ def placement_report(train_rows, test_rows, weights):
           + ("  (each dot held out)" if same else ""))
     print(f"{'method':<10} {'err x':>8} {'err y':>8}   {'moves x pred/true':>22}"
           f"   {'moves y pred/true':>22}")
-    for name, predict in (("idw", idw), ("linear", lin)):
+    for name, predict in (("idw", idw), ("no lidY", bare), ("linear", lin)):
         ex, ey, px_, py_, tx_, ty_ = [], [], [], [], [], []
         for fitted, chunk in plan:
             for row in chunk:
@@ -307,6 +410,14 @@ def placement_report(train_rows, test_rows, weights):
         print(f"{name:<10} {st.median(ex):>8.0f} {st.median(ey):>8.0f}   "
               f"{spread(px_):>10.0f} /{spread(tx_):>10.0f}   "
               f"{spread(py_):>10.0f} /{spread(ty_):>10.0f}")
+
+    # A v1 capture has no eyelid column, so the fit that uses one is singular
+    # and predicts nothing. Score the tiles against whichever fit this capture
+    # can actually support rather than printing an empty table.
+    shipping = lin if any(predictor for predictor in
+                          (lin(fitted, row["display"], row["x"])
+                           for fitted, chunk in plan[:1] for row in chunk[:1])) else bare
+    tile_report(plan, shipping, frames)
 
 
 def main():
@@ -369,7 +480,7 @@ def main():
                   f"wrong {result['wrong']:>6.1%}   lag {result['lag']:>3.0f}")
 
     if args.placement:
-        placement_report(train_rows, test_rows, model["jitter"])
+        placement_report(train_rows, test_rows, model["jitter"], arrangement(files[-1]))
 
 
 if __name__ == "__main__":

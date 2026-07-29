@@ -171,7 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func gazeStatusText() -> String {
         let settings = Settings.shared
         if !settings.gazeEnabled { return "Off" }
-        if !settings.isGazeCalibrated { return "Needs calibration before it can do anything" }
+        if !settings.isGazeCalibrated {
+            return settings.hasStaleGazeCalibration
+                ? "Calibration is from an older version, recalibrate"
+                : "Needs calibration before it can do anything"
+        }
         if settings.gazeCalibrationArrangement != screenArrangementFingerprint() {
             return "Calibrated for a different display layout, recalibrate"
         }
@@ -341,9 +345,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             around each screen and you look at it, which takes about \
             \(seconds) seconds.
 
-            It goes round twice: once holding your head still and moving only \
-            your eyes, once looking naturally. Both are needed, or it only \
-            recognises whichever way you calibrated.
+            It goes round twice. The first pass wants your head facing straight \
+            ahead the whole way through, moving only your eyes, even when the \
+            dot crosses to another screen. The second wants you looking \
+            naturally, turning your head as much as you like. Both are needed, \
+            or it only recognises whichever way you calibrated.
             """
         alert.addButton(withTitle: "Calibrate")
         alert.addButton(withTitle: "Later")

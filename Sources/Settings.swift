@@ -83,12 +83,13 @@ final class Settings {
     /// saved before it was measured, which fall back to the older scaling.
     var gazeNoise: GazeSample? {
         get {
-            guard let row = defaults.array(forKey: "gazeNoise") as? [Double], row.count == 4
+            guard let row = defaults.array(forKey: "gazeNoise") as? [Double], row.count == 5
             else { return nil }
-            return GazeSample(headX: row[0], headY: row[1], eyeX: row[2], eyeY: row[3])
+            return GazeSample(headX: row[0], headY: row[1], eyeX: row[2], eyeY: row[3], lidY: row[4])
         }
         set {
-            defaults.set(newValue.map { [$0.headX, $0.headY, $0.eyeX, $0.eyeY] }, forKey: "gazeNoise")
+            defaults.set(newValue.map { [$0.headX, $0.headY, $0.eyeX, $0.eyeY, $0.lidY] },
+                         forKey: "gazeNoise")
         }
     }
 
@@ -101,6 +102,14 @@ final class Settings {
     }
 
     var isGazeCalibrated: Bool { gazeProfile != nil }
+
+    /// A calibration is saved but can't be read, because it was recorded by a
+    /// version whose readings meant something else. Worth telling apart from
+    /// never having calibrated: the feature going quiet after an update is
+    /// otherwise indistinguishable from it being broken.
+    var hasStaleGazeCalibration: Bool {
+        defaults.array(forKey: "gazeProfile") != nil && gazeProfile == nil
+    }
 
     func clearGazeCalibration() {
         defaults.removeObject(forKey: "gazeProfile")

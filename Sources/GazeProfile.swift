@@ -90,17 +90,21 @@ struct GazeProfile {
 
     /// How readable each axis turned out to be, for the debug trace.
     var weightSummary: String {
-        String(format: "headX %.2f headY %.2f eyeX %.2f eyeY %.2f",
-               weights.headX, weights.headY, weights.eyeX, weights.eyeY)
+        String(format: "headX %.2f headY %.2f eyeX %.2f eyeY %.2f lidY %.2f",
+               weights.headX, weights.headY, weights.eyeX, weights.eyeY, weights.lidY)
     }
 
     private func distance(_ a: GazeSample, _ b: GazeSample) -> Double {
-        let headX = (a.headX - b.headX) * weights.headX
-        let headY = (a.headY - b.headY) * weights.headY
-        let eyeX = (a.eyeX - b.eyeX) * weights.eyeX
-        let eyeY = (a.eyeY - b.eyeY) * weights.eyeY
-        return (headX * headX + headY * headY + eyeX * eyeX + eyeY * eyeY).squareRoot()
+        GazeProfile.measured.reduce(0) { total, axis in
+            let delta = (a[keyPath: axis] - b[keyPath: axis]) * weights[keyPath: axis]
+            return total + delta * delta
+        }.squareRoot()
     }
+
+    /// Every axis a reading carries, so adding one is a single edit here rather
+    /// than a term to remember in four different sums.
+    private static let measured: [WritableKeyPath<GazeSample, Double>] =
+        [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY]
 
     // MARK: Placement
 
@@ -113,17 +117,24 @@ struct GazeProfile {
         var eyeX = 0.0
         var headY = 0.0
         var eyeY = 0.0
+        var lidY = 0.0
 
         func callAsFunction(_ sample: GazeSample) -> Double {
             constant + headX * sample.headX + eyeX * sample.eyeX
-                + headY * sample.headY + eyeY * sample.eyeY
+                + headY * sample.headY + eyeY * sample.eyeY + lidY * sample.lidY
         }
     }
 
     /// The measured axes and the Placement weights they pair with, in one fixed
     /// order so a solved coefficient vector reads back into a Placement.
-    private static let axes: [KeyPath<GazeSample, Double>] = [\.headX, \.eyeX, \.headY, \.eyeY]
-    private static let slots: [WritableKeyPath<Placement, Double>] = [\.headX, \.eyeX, \.headY, \.eyeY]
+    /// Grouped horizontal first, then vertical, so each axis of the dot takes a
+    /// contiguous slice as the terms that carry it.
+    private static let axes: [KeyPath<GazeSample, Double>] =
+        [\.headX, \.eyeX, \.headY, \.eyeY, \.lidY]
+    private static let slots: [WritableKeyPath<Placement, Double>] =
+        [\.headX, \.eyeX, \.headY, \.eyeY, \.lidY]
+    private static let horizontal = [0, 1]
+    private static let vertical = [2, 3, 4]
 
     /// Least squares for `value ≈ c + Σ coefficient · feature`, or nil when the
     /// readings can't pin the coefficients down — a calibration where every dot
@@ -193,8 +204,8 @@ struct GazeProfile {
 
         var out: [CGDirectDisplayID: (x: Placement, y: Placement)] = [:]
         for (display, group) in grouped {
-            guard let x = placement(group, own: [0, 1], cross: [2, 3], value: \.x),
-                  let y = placement(group, own: [2, 3], cross: [0, 1], value: \.y)
+            guard let x = placement(group, own: horizontal, cross: vertical, value: \.x),
+                  let y = placement(group, own: vertical, cross: horizontal, value: \.y)
             else { continue }
             out[display] = (x: x, y: y)
         }
@@ -219,29 +230,26 @@ struct GazeProfile {
     /// from "moves a lot because it can't be pinned down".
     private static func fit(_ groups: [CGDirectDisplayID: [GazeSample]],
                             noise: GazeSample?) -> GazeSample {
-        func weight(_ axis: (GazeSample) -> Double) -> Double {
+        func weight(_ axis: WritableKeyPath<GazeSample, Double>) -> Double {
             let perDisplay = groups.values.map { samples in
-                samples.map(axis)
+                samples.map { $0[keyPath: axis] }
             }
             let means = perDisplay.map { mean($0) }
             guard means.count > 1 else { return 1 }
             let between = spread(means)
-            // Profiles saved before jitter was measured fall back to the old
-            // within-display spread, so an existing calibration still loads.
-            let scale = noise.map(axis) ?? mean(perDisplay.map { spread($0) })
+            // A calibration recorded before jitter was measured falls back to
+            // the older within-display spread rather than refusing to load.
+            let scale = noise?[keyPath: axis] ?? mean(perDisplay.map { spread($0) })
             return between / max(scale, gazeAxisFloor)
         }
 
-        var raw = GazeSample(headX: weight(\.headX), headY: weight(\.headY),
-                             eyeX: weight(\.eyeX), eyeY: weight(\.eyeY))
+        var raw = GazeSample(headX: 0, headY: 0, eyeX: 0, eyeY: 0, lidY: 0)
+        for axis in measured { raw[keyPath: axis] = weight(axis) }
         // Scale is arbitrary since only ratios of distances are ever compared;
         // normalising just makes the trace readable.
-        let peak = max(raw.headX, raw.headY, raw.eyeX, raw.eyeY)
+        let peak = measured.map { raw[keyPath: $0] }.max() ?? 0
         if peak > 0 {
-            raw.headX /= peak
-            raw.headY /= peak
-            raw.eyeX /= peak
-            raw.eyeY /= peak
+            for axis in measured { raw[keyPath: axis] /= peak }
         }
         return raw
     }
@@ -262,13 +270,18 @@ struct GazeProfile {
 
     // MARK: Storage
 
-    /// Flattened as one row per reading: display id, the four axes, then the
-    /// point on screen if it was recorded.
+    /// Flattened as one row per reading: a format tag, the display id, every
+    /// axis, then the point on screen if it was recorded.
+    ///
+    /// The tag is what makes an older calibration fail to load rather than load
+    /// wrong. `eyeY` used to be scaled by eye height and is now scaled by eye
+    /// width, so the same number means a different angle: a profile from before
+    /// that would parse cleanly and then send windows to the wrong place, which
+    /// is worse than asking for a minute of recalibration.
     var storage: [[Double]] {
         references.map { reference in
-            var row = [Double(reference.display),
-                       reference.sample.headX, reference.sample.headY,
-                       reference.sample.eyeX, reference.sample.eyeY]
+            var row = [Double(GazeProfile.format), Double(reference.display)]
+            row += GazeProfile.measured.map { reference.sample[keyPath: $0] }
             if let point = reference.point {
                 row.append(Double(point.x))
                 row.append(Double(point.y))
@@ -276,6 +289,13 @@ struct GazeProfile {
             return row
         }
     }
+
+    /// Negative on purpose. A row used to begin with a display id, which is
+    /// unsigned, so a negative leading value is one an older profile can never
+    /// produce. Tagging with 2 very nearly shipped: a pre-point row from display
+    /// 2 is seven numbers beginning with a 2, which is also exactly the shape of
+    /// a tagged row without a point, and it parsed clean.
+    private static let format = -2
 
     /// Whether the dot has anywhere to go, which the debug overlay reports so a
     /// blank screen doesn't read as a broken tracker.
@@ -294,14 +314,21 @@ struct GazeProfile {
 
     init?(storage: [[Double]], noise: GazeSample? = nil) {
         guard !storage.isEmpty else { return nil }
+        let axes = GazeProfile.measured.count
         var parsed: [GazeReference] = []
         for row in storage {
-            // Five columns is a profile from before the point was recorded.
-            guard row.count == 5 || row.count == 7 else { return nil }
+            guard row.first == Double(GazeProfile.format) else { return nil }
+            let withPoint = 2 + axes + 2
+            guard row.count == 2 + axes || row.count == withPoint else { return nil }
+            var sample = GazeSample(headX: 0, headY: 0, eyeX: 0, eyeY: 0, lidY: 0)
+            for (index, axis) in GazeProfile.measured.enumerated() {
+                sample[keyPath: axis] = row[2 + index]
+            }
             parsed.append(GazeReference(
-                display: CGDirectDisplayID(row[0]),
-                sample: GazeSample(headX: row[1], headY: row[2], eyeX: row[3], eyeY: row[4]),
-                point: row.count == 7 ? CGPoint(x: row[5], y: row[6]) : nil))
+                display: CGDirectDisplayID(row[1]),
+                sample: sample,
+                point: row.count == withPoint
+                    ? CGPoint(x: row[withPoint - 2], y: row[withPoint - 1]) : nil))
         }
         self.init(references: parsed, noise: noise)
     }

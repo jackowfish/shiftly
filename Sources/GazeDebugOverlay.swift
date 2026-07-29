@@ -79,6 +79,11 @@ final class GazeDebugOverlay {
         let profile = Settings.shared.gazeProfile
         let reading = GazeFocus.shared.reading()
         let chosen = GazeFocus.shared.gazedDisplay()
+        // Asked without the display a gesture is currently on, so the overlay
+        // shows what the estimate points at rather than what a press would
+        // change. Those differ whenever you're already on the right window, and
+        // a diagnostic that goes blank when it agrees with you is no use.
+        let window = GazeFocus.shared.gazedTarget()
         var point = reading.flatMap { profile?.point(for: $0) }
         // The fit is linear and will extrapolate past the edges when you look
         // beyond the outermost calibration dots. Pinned to the screen so it
@@ -106,9 +111,10 @@ final class GazeDebugOverlay {
             // The ratio is the whole decision: below the margin it acts, above
             // it the two displays are too close to call and it leaves focus be.
             let ratio = ranked.count > 1 ? ranked[0].distance / max(ranked[1].distance, 0.0001) : 0
-            caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f",
+            caption = String(format: "%@   ratio %.2f / %.2f   head %.2f/%.2f  eye %.2f/%.2f  lid %.2f   window %@",
                              scores, ratio, gazeMargin,
-                             reading.headX, reading.headY, reading.eyeX, reading.eyeY)
+                             reading.headX, reading.headY, reading.eyeX, reading.eyeY,
+                             reading.lidY, window?.reason ?? "none")
             // A blank screen otherwise reads as a broken tracker rather than an
             // old calibration that predates the dot having anywhere to go.
             if !profile.hasPoints {
@@ -121,6 +127,7 @@ final class GazeDebugOverlay {
         for (identifier, view) in views {
             view.trail = identifier == chosen ? trail : []
             view.isChosen = identifier == chosen
+            view.windowRect = window?.display == identifier ? window?.bounds : nil
             view.caption = caption
             view.needsDisplay = true
         }
@@ -133,6 +140,9 @@ final class GazeDotView: NSView {
     var screenRect = CGRect.zero
     var trail: [CGPoint] = []
     var isChosen = false
+    /// The window a gesture would act on, in AX coordinates. Named around
+    /// `NSView.window` rather than shadowing it.
+    var windowRect: CGRect?
     var caption = ""
 
     override var isFlipped: Bool { true }
@@ -147,6 +157,20 @@ final class GazeDotView: NSView {
             edge.lineWidth = 6
             accent.withAlphaComponent(0.55).setStroke()
             edge.stroke()
+        }
+
+        // The window itself, which is the answer now that gaze picks between
+        // windows on one screen rather than only between screens.
+        if let windowRect {
+            let local = NSRect(x: windowRect.minX - screenRect.minX,
+                               y: windowRect.minY - screenRect.minY,
+                               width: windowRect.width, height: windowRect.height)
+            let outline = NSBezierPath(roundedRect: local.insetBy(dx: 2, dy: 2), xRadius: 10, yRadius: 10)
+            outline.lineWidth = 4
+            accent.withAlphaComponent(0.9).setStroke()
+            outline.stroke()
+            accent.withAlphaComponent(0.10).setFill()
+            outline.fill()
         }
 
         // Older positions fade out, which turns jitter into something you can

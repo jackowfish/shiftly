@@ -155,7 +155,8 @@ final class GazeCalibrator {
                 headX: collected.reduce(0) { $0 + $1.headX } / count,
                 headY: collected.reduce(0) { $0 + $1.headY } / count,
                 eyeX: collected.reduce(0) { $0 + $1.eyeX } / count,
-                eyeY: collected.reduce(0) { $0 + $1.eyeY } / count)
+                eyeY: collected.reduce(0) { $0 + $1.eyeY } / count,
+                lidY: collected.reduce(0) { $0 + $1.lidY } / count)
             references.append(GazeReference(display: display, sample: mean, point: point))
             // The spread inside a single burst, while you held still on one dot,
             // is how precisely each axis can be measured at all. That's the
@@ -164,9 +165,11 @@ final class GazeCalibrator {
             noise.append(GazeSample(headX: spread(collected.map(\.headX)),
                                     headY: spread(collected.map(\.headY)),
                                     eyeX: spread(collected.map(\.eyeX)),
-                                    eyeY: spread(collected.map(\.eyeY))))
-            debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f",
-                            display, collected.count, mean.headX, mean.headY, mean.eyeX, mean.eyeY))
+                                    eyeY: spread(collected.map(\.eyeY)),
+                                    lidY: spread(collected.map(\.lidY))))
+            debugLog(String(format: "calibration recorded display %u from %d frames: head %.3f/%.3f eye %.3f/%.3f lid %.3f",
+                            display, collected.count, mean.headX, mean.headY,
+                            mean.eyeX, mean.eyeY, mean.lidY))
         }
         index += 1
         advance()
@@ -182,7 +185,7 @@ final class GazeCalibrator {
             return sorted[sorted.count / 2]
         }
         return GazeSample(headX: middle(\.headX), headY: middle(\.headY),
-                          eyeX: middle(\.eyeX), eyeY: middle(\.eyeY))
+                          eyeX: middle(\.eyeX), eyeY: middle(\.eyeY), lidY: middle(\.lidY))
     }
 
     private func spread(_ values: [Double]) -> Double {
@@ -273,7 +276,8 @@ final class GazeCalibrator {
             view.target = nil
             view.style = style
             view.countdown = key == display ? remaining : nil
-            view.countdownTitle = key == display ? "Look at \(name ?? "this display")" : ""
+            view.countdownTitle = key == display
+                ? style.countdownTitle(for: name ?? "this display") : ""
             view.needsDisplay = true
         }
         debugLog("calibration counting in on display \(display) [\(style.name)]: \(remaining)")
@@ -347,10 +351,10 @@ final class CalibrationView: NSView {
                          font: .systemFont(ofSize: 30, weight: .semibold),
                          color: .white,
                          y: bounds.midY - 150)
-            drawCentered(style.hint,
-                         font: .systemFont(ofSize: 19, weight: .regular),
-                         color: NSColor.white.withAlphaComponent(0.8),
-                         y: bounds.midY + 100)
+            drawWrapped(style.hint,
+                        font: .systemFont(ofSize: 19, weight: .regular),
+                        color: NSColor.white.withAlphaComponent(0.8),
+                        y: bounds.midY + 100)
         }
 
         let hint: String
@@ -359,13 +363,10 @@ final class CalibrationView: NSView {
         } else {
             hint = target == nil ? "Calibrating on another display…" : style.hint
         }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 17, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.85),
-        ]
-        let size = hint.size(withAttributes: attributes)
-        hint.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: bounds.height - 90),
-                  withAttributes: attributes)
+        drawWrapped(hint,
+                    font: .systemFont(ofSize: 17, weight: .medium),
+                    color: NSColor.white.withAlphaComponent(0.85),
+                    y: bounds.height - 110)
 
         let barWidth = min(bounds.width * 0.3, 320.0)
         let bar = NSRect(x: (bounds.width - barWidth) / 2, y: bounds.height - 56, width: barWidth, height: 4)
@@ -382,6 +383,21 @@ final class CalibrationView: NSView {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let size = text.size(withAttributes: attributes)
         text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: y), withAttributes: attributes)
+    }
+
+    /// Wrapped and centred inside a column, so an instruction long enough to say
+    /// what it means still fits on a portrait display.
+    private func drawWrapped(_ text: String, font: NSFont, color: NSColor, y: CGFloat) {
+        guard !text.isEmpty else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineSpacing = 3
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
+        ]
+        let width = min(bounds.width - 80, 900.0)
+        let box = NSRect(x: (bounds.width - width) / 2, y: y, width: width, height: 200)
+        text.draw(with: box, options: [.usesLineFragmentOrigin], attributes: attributes)
     }
 
     override func mouseDown(with event: NSEvent) {

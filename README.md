@@ -62,7 +62,9 @@ The last few frames are combined with a median rather than an average, which fol
 
 Click the display you want. A click outranks gaze for a couple of seconds afterwards, so if a reading disagrees with you, saying so out loud wins.
 
-**Show Gaze Dot** under Eye Tracking outlines the display a gesture would act on right now and draws roughly where on it you're looking, with the distances and the margin ratio underneath. The outline is the part that's actually decided; the dot interpolates between calibration points and is only good enough to show which way things lean. A dot on the wrong screen is the bug worth reporting. Calibrations recorded before this existed still work, they just can't place the dot until you recalibrate.
+**Show Gaze Dot** under Eye Tracking outlines the display a gesture would act on right now and draws roughly where on it you're looking, with the distances and the margin ratio underneath. The outline is the part that's actually decided; the dot is a rough indication. A dot on the wrong screen is the bug worth reporting. Calibrations recorded before this existed still work, they just can't place the dot until you recalibrate.
+
+The dot is fitted separately from the display choice, and it has to be. The classifier scales each axis by how well it tells displays apart, which on a side-by-side desk puts vertical at about a quarter of horizontal, correctly, since vertical says nothing about which of two adjacent screens you're on. Drawing the dot through that same metric made it slide left and right while barely moving up or down: measured against held-out calibration dots, it covered 207px of vertical range where the real answer covered 788px. Placement instead takes each axis at face value and least-squares fits horizontal gaze from head yaw plus eye yaw, vertical from head pitch plus eye pitch, per display. That drops median error from 634x/653y px to 238x/387y px and tracks the full vertical range.
 
 ### Calibration
 

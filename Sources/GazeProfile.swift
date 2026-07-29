@@ -34,6 +34,9 @@ struct GazeProfile {
     /// How much weight each axis earned from the calibration.
     private let weights: GazeSample
 
+    /// Per-display fit from a reading to a point on that display, for the dot.
+    private let placements: [CGDirectDisplayID: (x: Placement, y: Placement)]
+
     var displays: Set<CGDirectDisplayID> { Set(references.map(\.display)) }
 
     /// Every display and how far its nearest reading is, nearest first.
@@ -65,29 +68,24 @@ struct GazeProfile {
     }
 
     /// Rough spot on the winning display this reading points at, in AX
-    /// coordinates, or nil if there's nothing confident to draw.
+    /// coordinates, or nil if the calibration can't pin one down.
     ///
-    /// Only good enough to show which way things are leaning. The calibration
-    /// points are the only places the mapping is pinned down, so this is an
-    /// inverse-distance blend of them and it pulls toward whichever one is
-    /// nearest. Restricted to the winning display's points, because the screens
-    /// aren't contiguous in desktop coordinates and blending across a gap would
-    /// put the dot in space that isn't on any display.
+    /// Fitted separately from the display choice, and that separation is the
+    /// point. The classifier scales each axis by how well it tells displays
+    /// apart, which on a side-by-side desk weights vertical at about a quarter
+    /// of horizontal — correct, because vertical says nothing about which of
+    /// two screens beside each other you're on. Blending calibration points
+    /// through that same metric made the dot slide left and right while barely
+    /// moving up or down, and sit near the middle of whichever screen won.
+    ///
+    /// Placement wants the opposite: every axis at face value, fitted to where
+    /// you were actually looking. Horizontal gaze is head yaw plus eye yaw and
+    /// vertical is head pitch plus eye pitch, so each is a least-squares fit
+    /// over its own two axes, per display.
     func point(for sample: GazeSample) -> CGPoint? {
-        guard let display = display(for: sample) else { return nil }
-        let known = references.filter { $0.display == display && $0.point != nil }
-        guard !known.isEmpty else { return nil }
-
-        var x = 0.0, y = 0.0, total = 0.0
-        for reference in known {
-            let measured = distance(sample, reference.sample)
-            let weight = 1 / (measured * measured + 0.05)
-            x += weight * Double(reference.point!.x)
-            y += weight * Double(reference.point!.y)
-            total += weight
-        }
-        guard total > 0 else { return nil }
-        return CGPoint(x: x / total, y: y / total)
+        guard let display = display(for: sample), let fit = placements[display] else { return nil }
+        return CGPoint(x: fit.x.constant + fit.x.head * sample.headX + fit.x.eye * sample.eyeX,
+                       y: fit.y.constant + fit.y.head * sample.headY + fit.y.eye * sample.eyeY)
     }
 
     /// How readable each axis turned out to be, for the debug trace.
@@ -102,6 +100,73 @@ struct GazeProfile {
         let eyeX = (a.eyeX - b.eyeX) * weights.eyeX
         let eyeY = (a.eyeY - b.eyeY) * weights.eyeY
         return (headX * headX + headY * headY + eyeX * eyeX + eyeY * eyeY).squareRoot()
+    }
+
+    // MARK: Placement
+
+    /// One axis of the dot: `constant + head * headAxis + eye * eyeAxis`.
+    struct Placement {
+        var constant = 0.0
+        var head = 0.0
+        var eye = 0.0
+    }
+
+    /// Least squares for `value ≈ c + p * first + q * second`, or nil when the
+    /// inputs don't vary enough to pin the coefficients down — a calibration
+    /// where every dot read the same has nothing to fit and should draw
+    /// nothing rather than a confident guess.
+    private static func solve(_ rows: [(first: Double, second: Double, value: Double)]) -> Placement? {
+        guard rows.count >= 3 else { return nil }
+        let n = Double(rows.count)
+        let sf = rows.reduce(0) { $0 + $1.first }
+        let ss = rows.reduce(0) { $0 + $1.second }
+        let sv = rows.reduce(0) { $0 + $1.value }
+        let sff = rows.reduce(0) { $0 + $1.first * $1.first }
+        let sss = rows.reduce(0) { $0 + $1.second * $1.second }
+        let sfs = rows.reduce(0) { $0 + $1.first * $1.second }
+        let sfv = rows.reduce(0) { $0 + $1.first * $1.value }
+        let ssv = rows.reduce(0) { $0 + $1.second * $1.value }
+
+        // Normal equations, solved by Cramer's rule: only 3x3, and a singular
+        // system is a real answer here rather than something to work around.
+        let m = [[n, sf, ss], [sf, sff, sfs], [ss, sfs, sss]]
+        let rhs = [sv, sfv, ssv]
+        func determinant(_ a: [[Double]]) -> Double {
+            a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+        }
+        let base = determinant(m)
+        guard abs(base) > 1e-9 else { return nil }
+
+        func replacing(_ column: Int) -> Double {
+            var copy = m
+            for row in 0..<3 { copy[row][column] = rhs[row] }
+            return determinant(copy) / base
+        }
+        return Placement(constant: replacing(0), head: replacing(1), eye: replacing(2))
+    }
+
+    private static func fitPlacements(
+        _ references: [GazeReference]
+    ) -> [CGDirectDisplayID: (x: Placement, y: Placement)] {
+        var grouped: [CGDirectDisplayID: [GazeReference]] = [:]
+        for reference in references where reference.point != nil {
+            grouped[reference.display, default: []].append(reference)
+        }
+
+        var out: [CGDirectDisplayID: (x: Placement, y: Placement)] = [:]
+        for (display, group) in grouped {
+            let horizontal = group.map {
+                (first: $0.sample.headX, second: $0.sample.eyeX, value: Double($0.point!.x))
+            }
+            let vertical = group.map {
+                (first: $0.sample.headY, second: $0.sample.eyeY, value: Double($0.point!.y))
+            }
+            guard let x = solve(horizontal), let y = solve(vertical) else { continue }
+            out[display] = (x: x, y: y)
+        }
+        return out
     }
 
     // MARK: Fitting
@@ -182,7 +247,7 @@ struct GazeProfile {
 
     /// Whether the dot has anywhere to go, which the debug overlay reports so a
     /// blank screen doesn't read as a broken tracker.
-    var hasPoints: Bool { references.contains { $0.point != nil } }
+    var hasPoints: Bool { !placements.isEmpty }
 
     init(references: [GazeReference], noise: GazeSample? = nil) {
         self.references = references
@@ -192,6 +257,7 @@ struct GazeProfile {
             groups[reference.display, default: []].append(reference.sample)
         }
         weights = GazeProfile.fit(groups, noise: noise)
+        placements = GazeProfile.fitPlacements(references)
     }
 
     init?(storage: [[Double]], noise: GazeSample? = nil) {

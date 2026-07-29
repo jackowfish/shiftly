@@ -185,16 +185,142 @@ def score(model, weights, rows, margin, frames, centroid):
     }
 
 
+def fit_linear(rows_):
+    """Least squares for value ~ c + p*first + q*second, or None if singular."""
+    n = float(len(rows_))
+    if n < 3:
+        return None
+    sf = sum(r[0] for r in rows_); ss = sum(r[1] for r in rows_); sv = sum(r[2] for r in rows_)
+    sff = sum(r[0] * r[0] for r in rows_); sss = sum(r[1] * r[1] for r in rows_)
+    sfs = sum(r[0] * r[1] for r in rows_)
+    sfv = sum(r[0] * r[2] for r in rows_); ssv = sum(r[1] * r[2] for r in rows_)
+    m = [[n, sf, ss], [sf, sff, sfs], [ss, sfs, sss]]
+    rhs = [sv, sfv, ssv]
+
+    def det(a):
+        return (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
+
+    base = det(m)
+    if abs(base) < 1e-9:
+        return None
+    out = []
+    for col in range(3):
+        copy = [row[:] for row in m]
+        for r in range(3):
+            copy[r][col] = rhs[r]
+        out.append(det(copy) / base)
+    return out
+
+
+def coverage(rows_):
+    return {(r["display"], r["style"]) for r in rows_}
+
+
+def placement_report(train_rows, test_rows, weights):
+    """How far the drawn dot lands from where you were actually looking.
+
+    Reported alongside the spread of what it predicts, because the failure this
+    was written for isn't inaccuracy — it's a dot pinned near the middle of the
+    screen, which can look respectable on median error while carrying no
+    information at all.
+    """
+    same = train_rows is test_rows
+    groups = bursts(train_rows)
+    summary = [([st.mean(r["x"][i] for r in g) for i in range(4)], g[0]["point"], g[0]["display"])
+               for g in groups]
+
+    def build(exclude):
+        """Fit both placement methods, optionally holding one dot out.
+
+        With sixteen dots total, scoring a fit on the very dots it was fitted to
+        flatters it. When there's only one capture, each dot is predicted by a
+        fit that never saw it.
+        """
+        idw_refs, linear = {}, {}
+        for i, (x, point, display) in enumerate(summary):
+            if i == exclude:
+                continue
+            idw_refs.setdefault(display, []).append((x, point))
+        for display, pts in idw_refs.items():
+            fx = fit_linear([(x[0], x[2], p[0]) for x, p in pts])   # headX, eyeX -> targetX
+            fy = fit_linear([(x[1], x[3], p[1]) for x, p in pts])   # headY, eyeY -> targetY
+            if fx and fy:
+                linear[display] = (fx, fy)
+        return idw_refs, linear
+
+    def idw(fitted, display, x):
+        refs = fitted[0].get(display)
+        if not refs:
+            return None
+        acc_x = acc_y = total = 0.0
+        for ref, point in refs:
+            d = math.sqrt(sum(((x[i] - ref[i]) * weights[i]) ** 2 for i in range(4)))
+            w = 1 / (d * d + 0.05)
+            acc_x += w * point[0]; acc_y += w * point[1]; total += w
+        return (acc_x / total, acc_y / total)
+
+    def lin(fitted, display, x):
+        if display not in fitted[1]:
+            return None
+        fx, fy = fitted[1][display]
+        return (fx[0] + fx[1] * x[0] + fx[2] * x[2], fy[0] + fy[1] * x[1] + fy[2] * x[3])
+
+    # Which fit each test frame is scored against: its own dot held out when
+    # train and test are the same capture, otherwise just the one fit.
+    if same:
+        test_groups = bursts(test_rows)
+        plan = [(build(i), g) for i, g in enumerate(test_groups)]
+    else:
+        plan = [(build(None), test_rows)]
+
+    print("\nplacement — where the debug dot lands, px from the dot you were told to look at"
+          + ("  (each dot held out)" if same else ""))
+    print(f"{'method':<10} {'err x':>8} {'err y':>8}   {'moves x pred/true':>22}"
+          f"   {'moves y pred/true':>22}")
+    for name, predict in (("idw", idw), ("linear", lin)):
+        ex, ey, px_, py_, tx_, ty_ = [], [], [], [], [], []
+        for fitted, chunk in plan:
+            for row in chunk:
+                got = predict(fitted, row["display"], row["x"])
+                if got is None:
+                    continue
+                ex.append(abs(got[0] - row["point"][0])); ey.append(abs(got[1] - row["point"][1]))
+                px_.append(got[0]); py_.append(got[1])
+                tx_.append(row["point"][0]); ty_.append(row["point"][1])
+        if not ex:
+            print(f"{name:<10} (no fit)")
+            continue
+        # "moves" is the standard deviation of the predictions against the truth.
+        # A dot stuck near the middle of the screen shows up here as a predicted
+        # spread far below the true one, however good the median error looks.
+        print(f"{name:<10} {st.median(ex):>8.0f} {st.median(ey):>8.0f}   "
+              f"{spread(px_):>10.0f} /{spread(tx_):>10.0f}   "
+              f"{spread(py_):>10.0f} /{spread(ty_):>10.0f}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="*")
     parser.add_argument("--margin", type=float, default=0.85)
     parser.add_argument("--frames", type=int, default=3)
+    parser.add_argument("--placement", action="store_true",
+                        help="score where the debug dot lands instead of only which display")
     args = parser.parse_args()
 
     files = args.files or sorted(glob.glob(os.path.join(CAPTURES, "*.csv")))
     if not files:
         raise SystemExit(f"no captures in {CAPTURES} — calibrate once to record one")
+
+    # A cancelled calibration writes a file too. Training on one scores at
+    # chance and looks like a broken classifier rather than a broken input.
+    full = max((len(coverage(load(f))) for f in files), default=0)
+    keep = [f for f in files if len(coverage(load(f))) == full]
+    for dropped in [f for f in files if f not in keep]:
+        print(f"skipping {os.path.basename(dropped)}: partial capture "
+              f"({len(coverage(load(dropped)))} of {full} display/pass combinations)")
+    files = keep
 
     # Two or more files: train on all but the last, test on the last, so the
     # score says whether a metric generalises rather than whether it memorised.
@@ -232,6 +358,9 @@ def main():
             result = score(model, model["jitter"], subset, args.margin, args.frames, False)
             print(f"  {style:<8} {len(subset):>4} frames   acc {result['acc']:>6.1%}   "
                   f"wrong {result['wrong']:>6.1%}   lag {result['lag']:>3.0f}")
+
+    if args.placement:
+        placement_report(train_rows, test_rows, model["jitter"])
 
 
 if __name__ == "__main__":

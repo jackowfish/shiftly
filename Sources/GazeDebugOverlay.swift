@@ -79,7 +79,17 @@ final class GazeDebugOverlay {
         let profile = Settings.shared.gazeProfile
         let reading = GazeFocus.shared.reading()
         let chosen = GazeFocus.shared.gazedDisplay()
-        let point = reading.flatMap { profile?.point(for: $0) }
+        var point = reading.flatMap { profile?.point(for: $0) }
+        // The fit is linear and will extrapolate past the edges when you look
+        // beyond the outermost calibration dots. Pinned to the screen so it
+        // rides the edge rather than disappearing, which would read as the
+        // tracker having lost you.
+        if let chosen, let estimate = point,
+           let screen = NSScreen.screens.first(where: { displayID(of: $0) == chosen }) {
+            let bounds = flipRect(screen.frame).insetBy(dx: gazeDotRadius, dy: gazeDotRadius)
+            point = CGPoint(x: min(max(estimate.x, bounds.minX), bounds.maxX),
+                            y: min(max(estimate.y, bounds.minY), bounds.maxY))
+        }
 
         if let point {
             trail.append(point)

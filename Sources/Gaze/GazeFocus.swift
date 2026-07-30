@@ -146,8 +146,47 @@ final class GazeFocus {
     private func noteClick() {
         let point = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else { return }
-        clickedDisplay = displayID(of: screen)
+        let display = displayID(of: screen)
+        clickedDisplay = display
         clickedAt = ProcessInfo.processInfo.systemUptime
+        learn(clickAt: CGPoint(x: point.x, y: primaryHeight - point.y), display: display)
+    }
+
+    /// One accepted click teaches the drift correction; see `GazeDrift`.
+    ///
+    /// The gates matter more than the learning. A click made mid-glance, or
+    /// while genuinely looking somewhere else, is a mislabelled reading, and a
+    /// correction fed mislabelled readings drifts instead of fixing drift. So
+    /// the estimate has to be steady across the decision window, agree with
+    /// the click about which display, and land near the click.
+    private func learn(clickAt point: CGPoint, display: CGDirectDisplayID) {
+        guard Settings.shared.gazeEnabled,
+              GazeTracker.shared.isRunning,
+              let profile = Settings.shared.gazeProfile,
+              let reading = reading()
+        else { return }
+
+        let recent = GazeTracker.shared.recent(within: gazeDecisionWindow)
+        guard recent.count >= gazeDecisionFrames else { return }
+        if let noise = Settings.shared.gazeNoise {
+            for axis in [\GazeSample.eyeX, \GazeSample.eyeY] {
+                let values = recent.map { $0[keyPath: axis] }
+                let mean = values.reduce(0, +) / Double(values.count)
+                let variance = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+                    / Double(values.count - 1)
+                if variance.squareRoot()
+                    > max(noise[keyPath: axis], gazeAxisFloor) * gazeDriftSteadyFactor { return }
+            }
+        }
+
+        guard profile.display(for: reading) == display,
+              let predicted = profile.point(for: reading),
+              hypot(predicted.x - point.x, predicted.y - point.y) <= gazeDriftAcceptRadius
+        else { return }
+
+        GazeDrift.shared.note(predicted: predicted, actual: point, on: display)
+        debugLog(String(format: "gaze drift: click at %.0f,%.0f vs estimate %.0f,%.0f, pairs %@",
+                        point.x, point.y, predicted.x, predicted.y, GazeDrift.shared.summary))
     }
 
     /// The reading a decision is made from: the median of the newest few
@@ -158,8 +197,17 @@ final class GazeFocus {
     /// axis is measured separately anyway, and it keeps one bad landmark fit on
     /// one axis from dragging the others with it.
     func reading() -> GazeSample? {
-        let samples = GazeTracker.shared.recent(within: gazeDecisionWindow).suffix(gazeDecisionFrames)
+        var samples = Array(GazeTracker.shared.recent(within: gazeDecisionWindow).suffix(gazeDecisionFrames))
         guard !samples.isEmpty else { return nil }
+        // A blink closes the lids over most of the window at once, which the
+        // median can't ride out, and the pupil landmark inside a closed eye is
+        // fiction. Frames below the profile's lid floor are dropped first;
+        // when every frame is mid-blink the unfiltered reading stands, which
+        // at worst is what every reading was before this filter.
+        if let floor = Settings.shared.gazeProfile?.lidFloor {
+            let open = samples.filter { $0.lidY >= floor }
+            if !open.isEmpty { samples = open }
+        }
         return GazeSample.perAxis { axis in
             let sorted = samples.map { $0[keyPath: axis] }.sorted()
             return sorted[sorted.count / 2]
@@ -167,13 +215,16 @@ final class GazeFocus {
     }
 
     /// Where on the desktop the estimate points, or nil when the calibration
-    /// predates placement and can only name a display.
+    /// predates placement and can only name a display. Carries the drift
+    /// correction, so everything downstream sees the corrected estimate.
     func gazedPoint() -> CGPoint? {
         guard Settings.shared.gazeEnabled,
               let profile = Settings.shared.gazeProfile,
-              let reading = reading()
+              let reading = reading(),
+              let display = profile.display(for: reading),
+              let point = profile.point(for: reading)
         else { return nil }
-        return profile.point(for: reading)
+        return GazeDrift.shared.corrected(point, on: display)
     }
 
     /// Once-a-second trace of what the camera sees and how each display scores,

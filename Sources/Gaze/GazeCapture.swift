@@ -23,11 +23,12 @@ enum GazeCapture {
 
         init() {
             // v2 added lidY and changed what eyeY means: it's scaled by eye
-            // width now, not eye height. v3 adds Vision's own head pose. The
-            // harness keys off the version, because mixing the two eyeY
+            // width now, not eye height. v3 adds Vision's own head pose. v4
+            // adds the corner-anchored per-eye pupil reads and the face box.
+            // The harness keys off the version, because mixing the two eyeY
             // definitions in one training set would compare angles measured
             // against different rulers.
-            rows.append("# shiftly gaze capture v3")
+            rows.append("# shiftly gaze capture v4")
             rows.append("# arrangement=\(screenArrangementFingerprint())")
             rows.append("t,display,targetX,targetY,style," + GazeSample.names.joined(separator: ","))
         }

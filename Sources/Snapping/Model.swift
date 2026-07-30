@@ -103,6 +103,43 @@ let gazeWindowInset: CGFloat = 80
 /// you: click the screen you want and it does what you said.
 let gazeClickOverride: TimeInterval = 2.0
 
+/// Ridge penalty for the quadratic placement fit, scaled by the reading count.
+/// Swept offline against held-out sessions; anything within a decade of this
+/// scores the same, so it isn't delicate.
+let gazeRidgeLambda = 0.01
+
+/// Calibration runs kept in the profile, newest first. Pooling runs is worth
+/// more than any model change measured so far — each run samples a different
+/// sitting posture, and a fit that has seen only one mistakes it for the truth
+/// — but a run from months ago describes a desk that may no longer exist.
+let gazeSessionLimit = 6
+
+/// Calibration burst frames whose eye aperture falls below this fraction of
+/// the burst's median are dropped as blinks before averaging. Lids matter to
+/// the fit — aperture is a real vertical signal — so the threshold sits well
+/// under the range normal looking produces.
+let gazeBlinkLidFraction = 0.7
+
+/// A click teaches placement, since you look at what you click. Each accepted
+/// click pairs the estimate with the click point, and an offset-and-gain
+/// correction per display and axis is refit from the newest pairs. This is
+/// what absorbs session drift — sitting differently today than when you
+/// calibrated — which measured as half the placement error.
+///
+/// A pair is accepted only when the estimate is steady (the eye axes' spread
+/// over the decision window within a few times their calibrated jitter — a
+/// glance-away mid-click fails this) and the estimate lands near the click,
+/// so a click made while genuinely looking elsewhere teaches nothing.
+let gazeDriftAcceptRadius: CGFloat = 500
+let gazeDriftSteadyFactor = 4.0
+let gazeDriftPairLimit = 40
+/// Offset needs a few pairs before it's trusted; gain also needs the pairs to
+/// span a real fraction of the display, since a slope fitted to a cluster of
+/// clicks in one corner extrapolates disaster across the rest of the screen.
+let gazeDriftMinPairs = 4
+let gazeDriftGainSpan = 0.15
+let gazeDriftGainRange = 0.5...1.5
+
 /// Cap on how long a window query to another app may block. These are
 /// synchronous calls into processes that might be busy, and they run on the
 /// press, so an app mid-beachball would otherwise stall the gesture.

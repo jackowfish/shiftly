@@ -38,7 +38,11 @@ I'm using whatever camera your mac is plugged into + Vision's face landmarks, al
 
 ### Calibrating
 
-Required, and it takes about a minute. Recalibrate if you change your display arrangement. Follow the instructions on screen - if it's not clear, the first calibration pass you should try to keep your head as still as possible while moving just your eyes across your monitors.
+Required, and it takes about a minute. Follow the instructions on screen - if it's not clear, the first calibration pass you should try to keep your head as still as possible while moving just your eyes across your monitors.
+
+Calibrations add up. Each run is pooled with your earlier ones instead of replacing them, and the pooled profile is measurably better: every run samples a slightly different sitting posture, and a fit that has only seen one mistakes it for the truth. So when accuracy annoys you, calibrate again - it compounds. Changing your display arrangement starts the pool over, since those readings describe screens that moved.
+
+It also learns from your clicks while you use it. You look at what you click, so each click (when the estimate is steady and roughly agrees) teaches a small per-display correction for how you're sitting right now. That's what keeps this morning's calibration honest this afternoon.
 
 ### How well it works
 
@@ -48,6 +52,8 @@ Required, and it takes about a minute. Recalibrate if you change your display ar
 | third of a 3440x1440 | 61% | 6% | 33% |
 | sixth of a 3440x1440 | 48% | 10% | 42% |
 | sixth of a 1692x3008 | 39% | 16% | 45% |
+
+Those numbers are from a single calibration with none of the pooling or click learning above. Replayed against held-out sessions, pooling four calibrations roughly doubled the sixth-of-a-screen hit rate over one and cut wrong actions nearly in half, and the click correction adds a few points on top (`tools/gaze_eval.py --sessions` reproduces this from your own captures).
 
 It's currently good for grabbing one of the two or three windows you actually have open, and it gets shaky once the slots get small. A slot only has to beat the other windows that are really there, which is an easier problem than a full tiling.
 

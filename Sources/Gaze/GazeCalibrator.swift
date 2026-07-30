@@ -147,6 +147,17 @@ final class GazeCalibrator {
 
     private func record(display: CGDirectDisplayID, point: CGPoint) {
         collecting = false
+        // Blinks close the lids and drag the pupil landmark with them, so a
+        // burst that caught one averages in a reading of your eyelid. The
+        // threshold is against this burst's own median, which self-scales:
+        // looking down narrows the lids too, but every frame of the burst
+        // narrows together.
+        if collected.count >= 4 {
+            let lids = collected.map(\.lidY).sorted()
+            let floor = lids[lids.count / 2] * gazeBlinkLidFraction
+            let open = collected.filter { $0.lidY >= floor }
+            if !open.isEmpty { collected = open }
+        }
         if collected.isEmpty {
             log("gaze: no face seen while looking at display \(display)")
         } else {
@@ -214,10 +225,32 @@ final class GazeCalibrator {
 
         if save, !references.isEmpty, covered == expected {
             Settings.shared.gazeNoise = pooledNoise()
-            Settings.shared.gazeProfile = GazeProfile(references: references)
-            Settings.shared.gazeCalibrationArrangement = screenArrangementFingerprint()
+            // A new run joins the profile rather than replacing it, as long as
+            // the desk is still the same desk. Runs sample different sitting
+            // postures, and pooling them was worth more than any model change
+            // measured so far — recalibrating makes the tracker better, not
+            // just different. A changed arrangement starts over: those readings
+            // describe displays that are no longer where they were.
+            let arrangement = screenArrangementFingerprint()
+            var pooled = references
+            if Settings.shared.gazeCalibrationArrangement == arrangement,
+               let previous = Settings.shared.gazeProfile {
+                let next = (previous.references.map(\.session).max() ?? -1) + 1
+                pooled = previous.references + references.map {
+                    GazeReference(display: $0.display, sample: $0.sample, point: $0.point, session: next)
+                }
+                let kept = Set(Set(pooled.map(\.session)).sorted().suffix(gazeSessionLimit))
+                pooled = pooled.filter { kept.contains($0.session) }
+            }
+            let profile = GazeProfile(references: pooled, noise: Settings.shared.gazeNoise)
+            Settings.shared.gazeProfile = profile
+            Settings.shared.gazeCalibrationArrangement = arrangement
+            // The drift pairs correct the previous fit; against this one
+            // they'd re-teach it errors it no longer makes.
+            GazeDrift.shared.reset()
             saved = true
-            log("gaze: calibrated on \(references.count) readings across \(covered.count) displays")
+            log("gaze: calibrated on \(references.count) readings across \(covered.count) displays, "
+                + "\(profile.sessionCount) session(s) pooled")
         } else if save {
             log("gaze: calibration incomplete, no face seen on \(expected.subtracting(covered).count) display(s)")
         } else {

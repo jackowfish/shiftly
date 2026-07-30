@@ -71,13 +71,29 @@ final class Settings {
     /// Nil until calibrated. There's no fallback: without labelled readings
     /// there's nothing to compare against, and guessing was what made the old
     /// version need a Flip Horizontal control.
+    ///
+    /// Cached after the first load. Construction parses the stored rows and
+    /// refits every placement, including the cross-session model comparison,
+    /// and this getter runs at overlay redraw rate.
     var gazeProfile: GazeProfile? {
         get {
-            GazeProfile(storage: defaults.array(forKey: "gazeProfile") as? [[Double]] ?? [],
-                        noise: gazeNoise)
+            if !profileLoaded {
+                cachedProfile = GazeProfile(
+                    storage: defaults.array(forKey: "gazeProfile") as? [[Double]] ?? [],
+                    noise: gazeNoise)
+                profileLoaded = true
+            }
+            return cachedProfile
         }
-        set { defaults.set(newValue?.storage, forKey: "gazeProfile") }
+        set {
+            defaults.set(newValue?.storage, forKey: "gazeProfile")
+            cachedProfile = newValue
+            profileLoaded = true
+        }
     }
+
+    private var cachedProfile: GazeProfile?
+    private var profileLoaded = false
 
     /// Per-axis measurement jitter from the last calibration. Nil for profiles
     /// saved before it was measured, which fall back to the older scaling.
@@ -93,6 +109,9 @@ final class Settings {
         set {
             defaults.set(newValue.map { sample in GazeSample.axes.map { sample[keyPath: $0] } },
                          forKey: "gazeNoise")
+            // The profile's weights are scaled by this, so a cached one is
+            // stale the moment it changes.
+            profileLoaded = false
         }
     }
 
@@ -118,5 +137,7 @@ final class Settings {
         defaults.removeObject(forKey: "gazeProfile")
         defaults.removeObject(forKey: "gazeNoise")
         defaults.removeObject(forKey: "gazeCalibrationArrangement")
+        cachedProfile = nil
+        profileLoaded = false
     }
 }

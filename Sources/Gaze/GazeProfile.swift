@@ -7,10 +7,16 @@ import AppKit
 /// is decided from the labels alone. Profiles saved before the point was
 /// recorded load with it missing, so an old calibration still works and just
 /// can't draw a dot.
+///
+/// The session says which calibration run the reading came from. Runs are
+/// pooled rather than replaced — see the note on `GazeProfile` — and the fits
+/// that compare models need to hold out whole runs, since readings within one
+/// run share its posture.
 struct GazeReference {
     let display: CGDirectDisplayID
     let sample: GazeSample
     var point: CGPoint?
+    var session = 0
 }
 
 /// What "looking at that display" measures like, learned from calibration.
@@ -25,6 +31,13 @@ struct GazeReference {
 /// Axis weights are learned too: display separation over measurement precision.
 /// Hand-picked weights can't know which axis carries the signal on a given desk
 /// — side by side it's yaw, stacked it's pitch, held still it's the pupils.
+///
+/// Calibrations accumulate instead of replacing each other. Half the placement
+/// error is session drift — you sit a little differently every time — and a fit
+/// that has only seen one posture mistakes it for the truth. Measured across
+/// held-out sessions, pooling four calibrations nearly doubled the rate of
+/// acting on the right sixth-of-a-screen slot over training on one. See
+/// `tools/gaze_eval.py --sessions`.
 struct GazeProfile {
     let references: [GazeReference]
 
@@ -32,9 +45,19 @@ struct GazeProfile {
     private let weights: GazeSample
 
     /// Per-display fit from a reading to a point on that display, for the dot.
-    private let placements: [CGDirectDisplayID: (x: Placement, y: Placement)]
+    private let placements: [CGDirectDisplayID: (x: AxisFit, y: AxisFit)]
 
     var displays: Set<CGDirectDisplayID> { Set(references.map(\.display)) }
+
+    /// How many calibration runs the profile holds.
+    var sessionCount: Int { Set(references.map(\.session)).count }
+
+    /// Eye aperture below this is a blink, not a gaze. Set under the smallest
+    /// aperture any calibration dot produced — looking down narrows the lids,
+    /// and the floor has to sit below everything normal looking measures, or
+    /// rejecting "blinks" would bias readings against looking down. Nil when
+    /// the profile predates the lid axis.
+    let lidFloor: Double?
 
     /// Every display and how far its nearest reading is, nearest first.
     ///
@@ -72,9 +95,7 @@ struct GazeProfile {
     /// screens you're on. Drawing the dot through that same metric made it slide
     /// sideways while barely moving up or down.
     ///
-    /// Placement wants the opposite: every axis at face value, least-squares fit
-    /// per display, each direction over its own axes plus the others as
-    /// corrections.
+    /// Placement wants the opposite: every axis at face value, fit per display.
     func point(for sample: GazeSample) -> CGPoint? {
         guard let display = display(for: sample), let fit = placements[display] else { return nil }
         return CGPoint(x: fit.x(sample), y: fit.y(sample))
@@ -96,27 +117,27 @@ struct GazeProfile {
     }
 
     /// The axes the profile learns from. `GazeSample.axes` carries more: Vision's
-    /// head pose is recorded but deliberately not fitted.
+    /// head pose, the corner-anchored per-eye reads and the face box are
+    /// recorded but deliberately not fitted until captures score them in.
     ///
-    /// It should have helped, since `headX`/`headY` are crude landmark ratios
-    /// estimating the same rotation. It doesn't. Training on one calibration and
-    /// testing on another, every way of including it scored worse (720px without
-    /// against 814px for yaw and pitch, 939px for all three), because it isn't
-    /// new information: `faceYaw` correlates with `headX` at r = 0.87. A
-    /// near-collinear column costs coefficient variance and adds no signal.
+    /// The pose angles were measured and rejected: training on one calibration
+    /// and testing on another, every way of including them scored worse (720px
+    /// without against 814px for yaw and pitch, 939px for all three), because
+    /// they aren't new information — `faceYaw` correlates with `headX` at
+    /// r = 0.87. A near-collinear column costs coefficient variance and adds no
+    /// signal. Head-pose *interaction* terms were tried too and also lost.
     ///
-    /// Scoring within one capture reverses that verdict, which is the part worth
-    /// remembering: at eighteen dots a display, extra parameters fit the session
-    /// rather than the person. The classifier was a closer call, since
-    /// nearest-neighbour pays no parameter cost, but its sign flipped depending
-    /// on which capture trained. See `tools/gaze_eval.py --placement`.
+    /// Scoring within one capture reverses such verdicts, which is the part
+    /// worth remembering: extra parameters fit the session rather than the
+    /// person. Everything here is judged across sessions now for exactly that
+    /// reason. See `tools/gaze_eval.py --sessions`.
     private static let fitted: [WritableKeyPath<GazeSample, Double>] =
         [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY]
 
     // MARK: Placement
 
-    /// One term of a placement fit: an axis, optionally multiplied by a second
-    /// one, which covers both the linear and the squared and product terms.
+    /// One term of a linear placement fit: an axis, optionally multiplied by a
+    /// second one, which covers both the linear and the product terms.
     struct Term {
         let first: Int
         let second: Int?
@@ -128,13 +149,58 @@ struct GazeProfile {
         }
     }
 
-    /// One axis of the dot: a constant plus a weighted sum of terms.
+    /// One axis of the dot as a plain least-squares fit: a constant plus a
+    /// weighted sum of terms.
     struct Placement {
         var constant = 0.0
         var terms: [(term: Term, weight: Double)] = []
 
         func callAsFunction(_ sample: GazeSample) -> Double {
             terms.reduce(constant) { $0 + $1.weight * $1.term.value(sample, GazeProfile.axes) }
+        }
+    }
+
+    /// One axis of the dot as a ridge fit over the quadratic expansion of the
+    /// measured axes: every axis, every square, every product, standardized.
+    ///
+    /// Standardizing is what makes one lambda meaningful across axes measured
+    /// in different units; the penalty is what lets twenty terms fit a
+    /// session's eighteen dots without memorizing them. A column that never
+    /// moved standardizes to zero and its weight goes to zero with it, so dead
+    /// axes need no special handling here.
+    struct RidgePlacement {
+        var constant = 0.0
+        var mean: [Double] = []
+        var scale: [Double] = []
+        var coefficients: [Double] = []
+
+        func callAsFunction(_ sample: GazeSample) -> Double {
+            let features = GazeProfile.quadFeatures(sample)
+            var out = constant
+            for i in 0..<coefficients.count {
+                out += coefficients[i] * (features[i] - mean[i]) / scale[i]
+            }
+            return out
+        }
+    }
+
+    /// One axis of one display's dot, whichever fit won the model comparison.
+    enum AxisFit {
+        case linear(Placement)
+        case quad(RidgePlacement)
+
+        func callAsFunction(_ sample: GazeSample) -> Double {
+            switch self {
+            case let .linear(fit): return fit(sample)
+            case let .quad(fit): return fit(sample)
+            }
+        }
+
+        var name: String {
+            switch self {
+            case .linear: return "linear"
+            case .quad: return "quad"
+            }
         }
     }
 
@@ -147,43 +213,25 @@ struct GazeProfile {
     private static let horizontal = [0, 1]
     private static let vertical = [2, 3, 4]
 
+    /// The quadratic expansion the ridge fit works over.
+    static func quadFeatures(_ sample: GazeSample) -> [Double] {
+        let base = axes.map { sample[keyPath: $0] }
+        var out = base
+        for i in 0..<base.count {
+            for j in i..<base.count { out.append(base[i] * base[j]) }
+        }
+        return out
+    }
+
     /// Terms for one axis of one display: every measured axis, linearly, with
     /// the ones that carry this direction first.
-    ///
-    /// Second-order terms are the standard mapping in the eye tracking literature
-    /// and were tried properly. Against held-out dots they win on exactly one
-    /// axis of one display (ultrawide vertical, 184px to 136px) while hurting its
-    /// horizontal and both axes of a portrait display. Choosing per axis then
-    /// scored worse than linear everywhere, 203px against 144px: at eighteen dots
-    /// the gap sits inside the noise, so the choice is near a coin flip and the
-    /// polynomial extrapolates badly when it loses. `Term` stays general so the
-    /// next attempt is a change here rather than a rewrite.
     private static func terms(own: [Int], cross: [Int]) -> [Term] {
         (own + cross).map { Term(first: $0, second: nil) }
     }
 
-    /// Least squares for `value ≈ c + Σ coefficient · feature`, or nil when the
-    /// readings can't pin the coefficients down — a calibration where every dot
-    /// measured the same has nothing to fit and should draw nothing rather than
-    /// a confident guess.
-    private static func solve(features: [[Double]], values: [Double]) -> [Double]? {
-        let terms = (features.first?.count ?? 0) + 1
-        // Headroom over the parameter count, not merely enough to be solvable.
-        // A fit with as many parameters as readings passes exactly through
-        // every one of them, which means it has fitted the jitter.
-        guard features.count >= terms + 2 else { return nil }
-
-        // Normal equations, built with a leading 1 for the constant term, then
-        // Gauss-Jordan with partial pivoting. At most 5x5.
-        let design = features.map { [1.0] + $0 }
-        var matrix = [[Double]](repeating: [Double](repeating: 0, count: terms + 1), count: terms)
-        for (row, value) in zip(design, values) {
-            for i in 0..<terms {
-                for j in 0..<terms { matrix[i][j] += row[i] * row[j] }
-                matrix[i][terms] += row[i] * value
-            }
-        }
-
+    /// Gauss-Jordan with partial pivoting over an augmented system, or nil
+    /// when it's singular. Shared by both solvers; at most 20x21.
+    private static func eliminate(_ matrix: inout [[Double]], terms: Int) -> [Double]? {
         for column in 0..<terms {
             guard let pivot = (column..<terms).max(by: { abs(matrix[$0][column]) < abs(matrix[$1][column]) }),
                   abs(matrix[pivot][column]) > 1e-9 else { return nil }
@@ -199,12 +247,34 @@ struct GazeProfile {
         return (0..<terms).map { matrix[$0][terms] }
     }
 
-    /// One axis of one display's dot. `own` are the axes that carry it directly,
-    /// `cross` the ones that only correct it.
-    private static func placement(_ group: [GazeReference],
-                                  own: [Int],
-                                  cross: [Int],
-                                  value: (CGPoint) -> CGFloat) -> Placement? {
+    /// Least squares for `value ≈ c + Σ coefficient · feature`, or nil when the
+    /// readings can't pin the coefficients down — a calibration where every dot
+    /// measured the same has nothing to fit and should draw nothing rather than
+    /// a confident guess.
+    private static func solve(features: [[Double]], values: [Double]) -> [Double]? {
+        let terms = (features.first?.count ?? 0) + 1
+        // Headroom over the parameter count, not merely enough to be solvable.
+        // A fit with as many parameters as readings passes exactly through
+        // every one of them, which means it has fitted the jitter.
+        guard features.count >= terms + 2 else { return nil }
+
+        let design = features.map { [1.0] + $0 }
+        var matrix = [[Double]](repeating: [Double](repeating: 0, count: terms + 1), count: terms)
+        for (row, value) in zip(design, values) {
+            for i in 0..<terms {
+                for j in 0..<terms { matrix[i][j] += row[i] * row[j] }
+                matrix[i][terms] += row[i] * value
+            }
+        }
+        return eliminate(&matrix, terms: terms)
+    }
+
+    /// The linear fit for one axis of one display. `own` are the axes that
+    /// carry it directly, `cross` the ones that only correct it.
+    private static func linearPlacement(_ group: [GazeReference],
+                                        own: [Int],
+                                        cross: [Int],
+                                        value: (CGPoint) -> CGFloat) -> Placement? {
         let values = group.map { Double(value($0.point!)) }
         func columns(_ terms: [Term]) -> [[Double]] {
             group.map { reference in terms.map { $0.value(reference.sample, axes) } }
@@ -232,18 +302,91 @@ struct GazeProfile {
                          terms: Array(zip(chosen, solved.dropFirst()).map { (term: $0, weight: $1) }))
     }
 
+    /// The ridge fit for one axis of one display.
+    private static func ridgePlacement(_ group: [GazeReference],
+                                       value: (CGPoint) -> CGFloat) -> RidgePlacement? {
+        let rows = group.map { quadFeatures($0.sample) }
+        let values = group.map { Double(value($0.point!)) }
+        let count = rows.count
+        guard count >= 5, let width = rows.first?.count else { return nil }
+
+        let mean = (0..<width).map { i in rows.reduce(0) { $0 + $1[i] } / Double(count) }
+        let scale = (0..<width).map { i in max(spread(rows.map { $0[i] }), 1e-9) }
+        let standardized = rows.map { row in
+            (0..<width).map { (row[$0] - mean[$0]) / scale[$0] }
+        }
+        let valueMean = values.reduce(0, +) / Double(count)
+        let centred = values.map { $0 - valueMean }
+
+        var matrix = [[Double]](repeating: [Double](repeating: 0, count: width + 1), count: width)
+        for (row, value) in zip(standardized, centred) {
+            for i in 0..<width {
+                for j in 0..<width { matrix[i][j] += row[i] * row[j] }
+                matrix[i][width] += row[i] * value
+            }
+        }
+        for i in 0..<width { matrix[i][i] += gazeRidgeLambda * Double(count) }
+        guard let solved = eliminate(&matrix, terms: width) else { return nil }
+        return RidgePlacement(constant: valueMean, mean: mean, scale: scale, coefficients: solved)
+    }
+
+    /// Both candidate fits for one axis of one display's group.
+    private static func candidates(_ group: [GazeReference],
+                                   own: [Int],
+                                   cross: [Int],
+                                   value: @escaping (CGPoint) -> CGFloat) -> (AxisFit?, AxisFit?) {
+        (linearPlacement(group, own: own, cross: cross, value: value).map(AxisFit.linear),
+         ridgePlacement(group, value: value).map(AxisFit.quad))
+    }
+
+    /// Picks linear or quadratic per display and axis by holding each session
+    /// out in turn: fit both on the others, score on the one held out, keep
+    /// whichever lands closer overall.
+    ///
+    /// Selection needs whole sessions, not dots. An inner split within one
+    /// session shares that session's posture, which flatters the richer model
+    /// — that's how the quadratic terms first got rejected here, judged on
+    /// eighteen dots. Judged across sessions the answer is stable and differs
+    /// by display: linear on an ultrawide, quadratic on a portrait display, on
+    /// the captures so far. A single-session profile can't run the comparison
+    /// and takes the linear fit, which won on those grounds originally.
+    private static func select(_ group: [GazeReference],
+                               own: [Int],
+                               cross: [Int],
+                               value: @escaping (CGPoint) -> CGFloat) -> AxisFit? {
+        let sessions = Set(group.map(\.session))
+        let (linear, quad) = candidates(group, own: own, cross: cross, value: value)
+        guard sessions.count >= 2, linear != nil, quad != nil else { return linear ?? quad }
+
+        var linearErrors: [Double] = []
+        var quadErrors: [Double] = []
+        for session in sessions {
+            let held = group.filter { $0.session == session }
+            let rest = group.filter { $0.session != session }
+            let (restLinear, restQuad) = candidates(rest, own: own, cross: cross, value: value)
+            guard let restLinear, let restQuad else { continue }
+            for reference in held {
+                let truth = Double(value(reference.point!))
+                linearErrors.append(abs(restLinear(reference.sample) - truth))
+                quadErrors.append(abs(restQuad(reference.sample) - truth))
+            }
+        }
+        guard !linearErrors.isEmpty else { return linear }
+        return median(linearErrors) <= median(quadErrors) ? linear : quad
+    }
+
     private static func fitPlacements(
         _ references: [GazeReference]
-    ) -> [CGDirectDisplayID: (x: Placement, y: Placement)] {
+    ) -> [CGDirectDisplayID: (x: AxisFit, y: AxisFit)] {
         var grouped: [CGDirectDisplayID: [GazeReference]] = [:]
         for reference in references where reference.point != nil {
             grouped[reference.display, default: []].append(reference)
         }
 
-        var out: [CGDirectDisplayID: (x: Placement, y: Placement)] = [:]
+        var out: [CGDirectDisplayID: (x: AxisFit, y: AxisFit)] = [:]
         for (display, group) in grouped {
-            guard let x = placement(group, own: horizontal, cross: vertical, value: \.x),
-                  let y = placement(group, own: vertical, cross: horizontal, value: \.y)
+            guard let x = select(group, own: horizontal, cross: vertical, value: \.x),
+                  let y = select(group, own: vertical, cross: horizontal, value: \.y)
             else { continue }
             out[display] = (x: x, y: y)
         }
@@ -293,6 +436,12 @@ struct GazeProfile {
         return values.reduce(0, +) / Double(values.count)
     }
 
+    private static func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
     /// Standard deviation, and zero rather than a divide-by-zero for a single
     /// reading, which is what a display calibrated from one point gives.
     private static func spread(_ values: [Double]) -> Double {
@@ -304,8 +453,8 @@ struct GazeProfile {
 
     // MARK: Storage
 
-    /// Flattened as one row per reading: a format tag, the display id, every
-    /// axis, then the point on screen if it was recorded.
+    /// Flattened as one row per reading: a format tag, the session, the display
+    /// id, every axis, then the point on screen if it was recorded.
     ///
     /// The tag is what makes an older calibration fail to load rather than load
     /// wrong. Several changes have altered what a recorded number means without
@@ -313,7 +462,7 @@ struct GazeProfile {
     /// windows to the wrong place, which is worse than asking for a recalibration.
     var storage: [[Double]] {
         references.map { reference in
-            var row = [Double(GazeProfile.format), Double(reference.display)]
+            var row = [Double(GazeProfile.format), Double(reference.session), Double(reference.display)]
             row += GazeSample.axes.map { reference.sample[keyPath: $0] }
             if let point = reference.point {
                 row.append(Double(point.x))
@@ -333,22 +482,25 @@ struct GazeProfile {
     /// notice. 3 read its pose off a landmarks pass, giving a three-valued yaw
     /// and flat-zero pitch and roll, and zero radians reads as a face pointing
     /// at the camera rather than as a missing reading. 4 fixed the pose but
-    /// measured landmarks inside the wrong bounding box.
-    private static let format = -5
+    /// measured landmarks inside the wrong bounding box. 6 added the session
+    /// column and the recorded-only axes.
+    private static let format = -6
 
     /// Whether the dot has anywhere to go, which the debug overlay reports so a
     /// blank screen doesn't read as a broken tracker.
     var hasPoints: Bool { !placements.isEmpty }
 
-    /// How many terms each display's fit ended up with, for the debug trace.
+    /// Which fit each display's dot ended up with, for the debug trace.
     var placementSummary: String {
         placements.sorted { $0.key < $1.key }
-            .map { "\($0.key) x:\($0.value.x.terms.count) y:\($0.value.y.terms.count) terms" }
+            .map { "\($0.key) x:\($0.value.x.name) y:\($0.value.y.name)" }
             .joined(separator: "  ")
     }
 
     init(references: [GazeReference], noise: GazeSample? = nil) {
         self.references = references
+        let lids = references.map(\.sample.lidY).filter { $0 > 0 }
+        lidFloor = lids.min().map { $0 * gazeBlinkLidFraction }
 
         var groups: [CGDirectDisplayID: [GazeSample]] = [:]
         for reference in references {
@@ -364,17 +516,18 @@ struct GazeProfile {
         var parsed: [GazeReference] = []
         for row in storage {
             guard row.first == Double(GazeProfile.format) else { return nil }
-            let withPoint = 2 + axes + 2
-            guard row.count == 2 + axes || row.count == withPoint else { return nil }
+            let withPoint = 3 + axes + 2
+            guard row.count == 3 + axes || row.count == withPoint else { return nil }
             var sample = GazeSample()
             for (index, axis) in GazeSample.axes.enumerated() {
-                sample[keyPath: axis] = row[2 + index]
+                sample[keyPath: axis] = row[3 + index]
             }
             parsed.append(GazeReference(
-                display: CGDirectDisplayID(row[1]),
+                display: CGDirectDisplayID(row[2]),
                 sample: sample,
                 point: row.count == withPoint
-                    ? CGPoint(x: row[withPoint - 2], y: row[withPoint - 1]) : nil))
+                    ? CGPoint(x: row[withPoint - 2], y: row[withPoint - 1]) : nil,
+                session: Int(row[1])))
         }
         self.init(references: parsed, noise: noise)
     }

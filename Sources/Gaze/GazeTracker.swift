@@ -41,13 +41,38 @@ struct GazeSample {
     var facePitch = 0.0
     var faceRoll = 0.0
 
+    /// Pupil displacement from the midpoint of the eye's two corners, per eye,
+    /// in half inter-corner widths, with the axes rotated to follow the eye
+    /// line. Recorded but not yet fitted, like the pose angles: the gaze
+    /// literature anchors the pupil to the corners because they're rigid — the
+    /// eye's bounding box tracks the lids, which move with vertical gaze, and
+    /// that coupling is systematic error the current features can't remove.
+    /// Whether these earn a place in the fit is decided the same way the pose
+    /// angles were: captures first, then `tools/gaze_eval.py`.
+    var eyeLX = 0.0
+    var eyeLY = 0.0
+    var eyeRX = 0.0
+    var eyeRY = 0.0
+
+    /// Where the face sits in the frame and how large it is, from the landmark
+    /// observation's bounding box. Head translation and camera distance in
+    /// other words — axes nothing else here measures. `headX` conflates
+    /// sliding your chair with turning your head; these separate the two.
+    /// Recorded, not fitted, same policy as above.
+    var faceX = 0.0
+    var faceY = 0.0
+    var faceSize = 0.0
+
     /// Every axis a reading carries, in stored and captured order. Enumerated
     /// once here rather than at each of the eight places a sample gets averaged,
-    /// differenced, serialised or written to CSV.
+    /// differenced, serialised or written to CSV. New axes go at the end, so a
+    /// capture's columns stay a prefix of any later version's.
     static let axes: [WritableKeyPath<GazeSample, Double>] =
-        [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY, \.faceYaw, \.facePitch, \.faceRoll]
+        [\.headX, \.headY, \.eyeX, \.eyeY, \.lidY, \.faceYaw, \.facePitch, \.faceRoll,
+         \.eyeLX, \.eyeLY, \.eyeRX, \.eyeRY, \.faceX, \.faceY, \.faceSize]
 
-    static let names = ["headX", "headY", "eyeX", "eyeY", "lidY", "faceYaw", "facePitch", "faceRoll"]
+    static let names = ["headX", "headY", "eyeX", "eyeY", "lidY", "faceYaw", "facePitch", "faceRoll",
+                        "eyeLX", "eyeLY", "eyeRX", "eyeRY", "faceX", "faceY", "faceSize"]
 
     /// A sample built by working out each axis independently, which is the
     /// shape of every mean, median and spread taken over a set of readings.
@@ -337,7 +362,60 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         sample.faceYaw = flip * (pose?.yaw?.doubleValue ?? 0)
         sample.facePitch = pose?.pitch?.doubleValue ?? 0
         sample.faceRoll = flip * (pose?.roll?.doubleValue ?? 0)
+
+        // The corner-anchored reads. Anchoring to the corner midpoint and
+        // rotating the axes onto the corner line makes them roll-free and
+        // lid-free by construction; a missing pupil leaves them 0, which the
+        // fit drops as a dead column rather than mismeasuring.
+        if let read = cornerOffset(leftEye, pupil: landmarks.leftPupil, flip: flip) {
+            sample.eyeLX = read.x
+            sample.eyeLY = read.y
+        }
+        if let read = cornerOffset(rightEye, pupil: landmarks.rightPupil, flip: flip) {
+            sample.eyeRX = read.x
+            sample.eyeRY = read.y
+        }
+
+        // The landmark observation's box, not the pose pass's, so the axes stay
+        // measured even on a frame where the second detector found nothing.
+        let box = face.boundingBox
+        sample.faceX = flip * Double(box.midX - 0.5)
+        sample.faceY = Double(0.5 - box.midY)
+        sample.faceSize = Double(box.width)
         return sample
+    }
+
+    /// Pupil displacement from the midpoint of the eye's corners, in half
+    /// inter-corner widths, with x running along the eye line and y
+    /// perpendicular to it, positive downward like the rest of the sample.
+    ///
+    /// The corners are taken as the contour's horizontal extremes, which holds
+    /// for Vision's eye regions across the poses a desk allows: the corners
+    /// are the widest points of the eye opening unless the head rolls past
+    /// ±45°, where tracking has already lost the plot for other reasons.
+    private func cornerOffset(_ region: VNFaceLandmarkRegion2D,
+                              pupil: VNFaceLandmarkRegion2D?,
+                              flip: Double) -> (x: Double, y: Double)? {
+        let points = region.normalizedPoints
+        guard points.count >= 2,
+              let inner = points.min(by: { $0.x < $1.x }),
+              let outer = points.max(by: { $0.x < $1.x }),
+              let point = pupil?.normalizedPoints.first
+        else { return nil }
+
+        let axisX = Double(outer.x - inner.x)
+        let axisY = Double(outer.y - inner.y)
+        let width = (axisX * axisX + axisY * axisY).squareRoot()
+        guard width > 0.001 else { return nil }
+
+        let dx = Double(point.x) - Double(inner.x + outer.x) / 2
+        let dy = Double(point.y) - Double(inner.y + outer.y) / 2
+        // Project onto the eye line and its perpendicular. Vision's y points
+        // up, so the perpendicular component is positive upward; the sign
+        // flips to make larger mean "looking further down".
+        let along = (dx * axisX + dy * axisY) / width
+        let across = (-dx * axisY + dy * axisX) / width
+        return (x: flip * along / (width / 2), y: -across / (width / 2))
     }
 
     private func centroid(_ region: VNFaceLandmarkRegion2D) -> CGPoint {

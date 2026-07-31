@@ -259,13 +259,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraMenu.addItem(.separator())
         cameraMenu.addItem(withTitle: "Cameras eye tracking can use:",
                            action: nil, keyEquivalent: "").isEnabled = false
-        for device in GazeTracker.allCameras() {
+        let connected = GazeTracker.allCameras()
+        var known = Settings.shared.gazeKnownCameras
+        for device in connected { known[device.uniqueID] = device.localizedName }
+        Settings.shared.gazeKnownCameras = known
+
+        for device in connected {
             let deviceItem = cameraMenu.addItem(withTitle: device.localizedName,
                                                 action: #selector(toggleCamera(_:)),
                                                 keyEquivalent: "")
             deviceItem.target = self
             deviceItem.state = GazeTracker.isAllowed(device) ? .on : .off
             deviceItem.representedObject = device.uniqueID
+        }
+        // Cameras seen before but absent right now stay in the list, so one
+        // that exists only while its app runs can be selected in advance.
+        let connectedIDs = Set(connected.map(\.uniqueID))
+        for (id, name) in known.sorted(by: { $0.value < $1.value }) where !connectedIDs.contains(id) {
+            let deviceItem = cameraMenu.addItem(withTitle: "\(name) (not connected)",
+                                                action: #selector(toggleCamera(_:)),
+                                                keyEquivalent: "")
+            deviceItem.target = self
+            deviceItem.state = GazeTracker.isAllowed(id: id, name: name) ? .on : .off
+            deviceItem.representedObject = id
         }
         cameraMenu.addItem(withTitle: "If no checked camera is connected, tracking",
                            action: nil, keyEquivalent: "").isEnabled = false
@@ -347,13 +363,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleCamera(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let device = GazeTracker.allCameras().first(where: { $0.uniqueID == id })
-        else { return }
+        guard let id = sender.representedObject as? String else { return }
+        let name = Settings.shared.gazeKnownCameras[id] ?? id
+        // The device carries the better default guess when it is connected;
+        // the remembered name has to stand in when it is not.
+        let allowed: Bool
+        if let device = GazeTracker.allCameras().first(where: { $0.uniqueID == id }) {
+            allowed = GazeTracker.isAllowed(device)
+        } else {
+            allowed = GazeTracker.isAllowed(id: id, name: name)
+        }
         var choices = Settings.shared.gazeCameraChoices
-        choices[id] = !GazeTracker.isAllowed(device)
+        choices[id] = !allowed
         Settings.shared.gazeCameraChoices = choices
-        log("gaze: camera \(device.localizedName) \(choices[id]! ? "selected" : "deselected")")
+        log("gaze: camera \(name) \(choices[id]! ? "selected" : "deselected")")
         GazeTracker.shared.cameraChoicesChanged()
         refreshMenu()
     }

@@ -372,6 +372,13 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         return !isVirtual(device)
     }
 
+    /// The same rule for a camera known only by its remembered name, which is
+    /// all the menu has for one that is not connected right now.
+    static func isAllowed(id: String, name: String) -> Bool {
+        if let choice = Settings.shared.gazeCameraChoices[id] { return choice }
+        return !name.lowercased().contains("virtual")
+    }
+
     /// Matches by name and model because there is no API-level marker: a
     /// camera extension looks exactly like a USB webcam to AVFoundation.
     private static func isVirtual(_ device: AVCaptureDevice) -> Bool {

@@ -141,6 +141,15 @@ final class Settings {
         set { defaults.set(newValue, forKey: "gazeCameraChoices") }
     }
 
+    /// Every camera the app has seen, id to display name. The menu lists these
+    /// alongside the connected ones because some cameras exist only while
+    /// their app runs - OBS publishes its virtual camera on demand - and
+    /// selecting such a camera has to be possible while it is absent.
+    var gazeKnownCameras: [String: String] {
+        get { defaults.dictionary(forKey: "gazeKnownCameras") as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: "gazeKnownCameras") }
+    }
+
     func clearGazeCalibration() {
         defaults.removeObject(forKey: "gazeProfile")
         defaults.removeObject(forKey: "gazeNoise")

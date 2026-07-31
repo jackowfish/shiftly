@@ -180,6 +180,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return "Calibrated for a different display layout, recalibrate"
         }
         if let name = GazeFocus.shared.currentDisplayName { return "Looking at: \(name)" }
+        // Distinct from the camera merely being warm on demand: with nothing
+        // in the allowed list connected, no gesture can bring it up either.
+        if !GazeTracker.allCameras().contains(where: GazeTracker.isAllowed) {
+            return "Paused: no selected camera is connected"
+        }
         if !GazeTracker.shared.isRunning {
             return "Ready (camera starts when you hold a modifier)"
         }
@@ -249,6 +254,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraMenu.addItem(withTitle: "On demand keeps the light off between gestures,",
                            action: nil, keyEquivalent: "").isEnabled = false
         cameraMenu.addItem(withTitle: "but a fast gesture can beat the camera starting.",
+                           action: nil, keyEquivalent: "").isEnabled = false
+
+        cameraMenu.addItem(.separator())
+        cameraMenu.addItem(withTitle: "Cameras eye tracking can use:",
+                           action: nil, keyEquivalent: "").isEnabled = false
+        for device in GazeTracker.allCameras() {
+            let deviceItem = cameraMenu.addItem(withTitle: device.localizedName,
+                                                action: #selector(toggleCamera(_:)),
+                                                keyEquivalent: "")
+            deviceItem.target = self
+            deviceItem.state = GazeTracker.isAllowed(device) ? .on : .off
+            deviceItem.representedObject = device.uniqueID
+        }
+        cameraMenu.addItem(withTitle: "If no checked camera is connected, tracking",
+                           action: nil, keyEquivalent: "").isEnabled = false
+        cameraMenu.addItem(withTitle: "pauses until one of them comes back.",
                            action: nil, keyEquivalent: "").isEnabled = false
         cameraItem.submenu = cameraMenu
 
@@ -322,6 +343,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let alwaysOn = sender.representedObject as? Bool else { return }
         Settings.shared.gazeCameraAlwaysOn = alwaysOn
         GazeFocus.shared.refresh()
+        refreshMenu()
+    }
+
+    @objc private func toggleCamera(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let device = GazeTracker.allCameras().first(where: { $0.uniqueID == id })
+        else { return }
+        var choices = Settings.shared.gazeCameraChoices
+        choices[id] = !GazeTracker.isAllowed(device)
+        Settings.shared.gazeCameraChoices = choices
+        log("gaze: camera \(device.localizedName) \(choices[id]! ? "selected" : "deselected")")
+        GazeTracker.shared.cameraChoicesChanged()
         refreshMenu()
     }
 

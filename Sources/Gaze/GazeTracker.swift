@@ -166,7 +166,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
                            object: nil, queue: .main) { [weak self] note in
             guard let self, self.wantsCamera,
                   let arrived = note.object as? AVCaptureDevice, arrived.hasMediaType(.video),
-                  !GazeTracker.isVirtual(arrived) else { return }
+                  GazeTracker.isAllowed(arrived) else { return }
             if !self.isRunning || self.pickDevice() != self.device {
                 self.rebuild("\(arrived.localizedName) connected")
             }
@@ -346,21 +346,11 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         return count > 0 ? Double(total) / Double(count) / 255 : 0
     }
 
-    /// The camera to use: the system default, unless that is a virtual camera.
-    ///
-    /// OBS and its kind register cameras that replay whatever their app feeds
-    /// them - no face, and pure black while the app is idle - and macOS is
-    /// happy to hand one out as the default. The tracker once attached to one
-    /// and sat blind until relaunch. A virtual feed can never show the desk
-    /// the profile was calibrated against, so none of them is ever acceptable.
-    private func pickDevice() -> AVCaptureDevice? {
-        guard let fallback = AVCaptureDevice.default(for: .video) else { return nil }
-        guard GazeTracker.isVirtual(fallback) else { return fallback }
-        log("gaze: default camera is \(fallback.localizedName), looking for a real one")
-
-        // External cameras first: a webcam present at the desk is there on
-        // purpose, and the built-in camera sees the lid, not the desk, in
-        // clamshell mode.
+    /// Every camera currently connected, for the menu and the picker.
+    /// External cameras first: a webcam present at the desk is there on
+    /// purpose, and the built-in camera sees the lid, not the desk, in
+    /// clamshell mode.
+    static func allCameras() -> [AVCaptureDevice] {
         let types: [AVCaptureDevice.DeviceType]
         if #available(macOS 14.0, *) {
             types = [.external, .continuityCamera, .builtInWideAngleCamera]
@@ -368,8 +358,18 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
             types = [.externalUnknown, .builtInWideAngleCamera]
         }
         return AVCaptureDevice.DiscoverySession(
-            deviceTypes: types, mediaType: .video, position: .unspecified
-        ).devices.first { !GazeTracker.isVirtual($0) }
+            deviceTypes: types, mediaType: .video, position: .unspecified).devices
+    }
+
+    /// Whether the menu's camera list permits this device. An explicit choice
+    /// wins; a camera never toggled defaults to allowed unless it looks
+    /// virtual. OBS and its kind register cameras that replay whatever their
+    /// app feeds them - no face, and pure black while the app is idle - and
+    /// the tracker once attached to one and sat blind until relaunch, so they
+    /// start deselected. The menu can still turn one on deliberately.
+    static func isAllowed(_ device: AVCaptureDevice) -> Bool {
+        if let choice = Settings.shared.gazeCameraChoices[device.uniqueID] { return choice }
+        return !isVirtual(device)
     }
 
     /// Matches by name and model because there is no API-level marker: a
@@ -378,6 +378,30 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         let name = device.localizedName.lowercased()
         let model = device.modelID.lowercased()
         return name.contains("virtual") || model.contains("virtual") || model.contains("obs")
+    }
+
+    /// The camera to use: the system default when the menu allows it, the
+    /// first allowed camera otherwise, or nil - in which case tracking stays
+    /// off until an allowed camera returns.
+    private func pickDevice() -> AVCaptureDevice? {
+        if let preferred = AVCaptureDevice.default(for: .video), GazeTracker.isAllowed(preferred) {
+            return preferred
+        }
+        return GazeTracker.allCameras().first { GazeTracker.isAllowed($0) }
+    }
+
+    /// Re-evaluates the camera after a menu toggle. Deselecting the one in
+    /// use switches to another allowed camera, or shuts the feed off when
+    /// none is connected; selecting one while the tracker sits waiting
+    /// brings it up.
+    func cameraChoicesChanged() {
+        guard wantsCamera else { return }
+        if isRunning {
+            if let device, GazeTracker.isAllowed(device), pickDevice() == device { return }
+            rebuild("camera selection changed")
+        } else {
+            start()
+        }
     }
 
     private func configure() -> Bool {

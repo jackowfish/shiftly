@@ -133,6 +133,14 @@ final class Settings {
         defaults.array(forKey: "gazeProfile") != nil && gazeProfile == nil
     }
 
+    /// Explicit per-camera choices from the menu, keyed by the device's unique
+    /// id: true means the tracker can use it. A camera absent from the map gets
+    /// a guessed default instead - see `GazeTracker.isAllowed`.
+    var gazeCameraChoices: [String: Bool] {
+        get { defaults.dictionary(forKey: "gazeCameraChoices") as? [String: Bool] ?? [:] }
+        set { defaults.set(newValue, forKey: "gazeCameraChoices") }
+    }
+
     func clearGazeCalibration() {
         defaults.removeObject(forKey: "gazeProfile")
         defaults.removeObject(forKey: "gazeNoise")

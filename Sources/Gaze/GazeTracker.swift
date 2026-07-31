@@ -165,8 +165,9 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         center.addObserver(forName: AVCaptureDevice.wasConnectedNotification,
                            object: nil, queue: .main) { [weak self] note in
             guard let self, self.wantsCamera,
-                  let arrived = note.object as? AVCaptureDevice, arrived.hasMediaType(.video) else { return }
-            if !self.isRunning || AVCaptureDevice.default(for: .video) != self.device {
+                  let arrived = note.object as? AVCaptureDevice, arrived.hasMediaType(.video),
+                  !GazeTracker.isVirtual(arrived) else { return }
+            if !self.isRunning || self.pickDevice() != self.device {
                 self.rebuild("\(arrived.localizedName) connected")
             }
         }
@@ -345,11 +346,45 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         return count > 0 ? Double(total) / Double(count) / 255 : 0
     }
 
+    /// The camera to use: the system default, unless that is a virtual camera.
+    ///
+    /// OBS and its kind register cameras that replay whatever their app feeds
+    /// them - no face, and pure black while the app is idle - and macOS is
+    /// happy to hand one out as the default. The tracker once attached to one
+    /// and sat blind until relaunch. A virtual feed can never show the desk
+    /// the profile was calibrated against, so none of them is ever acceptable.
+    private func pickDevice() -> AVCaptureDevice? {
+        guard let fallback = AVCaptureDevice.default(for: .video) else { return nil }
+        guard GazeTracker.isVirtual(fallback) else { return fallback }
+        log("gaze: default camera is \(fallback.localizedName), looking for a real one")
+
+        // External cameras first: a webcam present at the desk is there on
+        // purpose, and the built-in camera sees the lid, not the desk, in
+        // clamshell mode.
+        let types: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) {
+            types = [.external, .continuityCamera, .builtInWideAngleCamera]
+        } else {
+            types = [.externalUnknown, .builtInWideAngleCamera]
+        }
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: types, mediaType: .video, position: .unspecified
+        ).devices.first { !GazeTracker.isVirtual($0) }
+    }
+
+    /// Matches by name and model because there is no API-level marker: a
+    /// camera extension looks exactly like a USB webcam to AVFoundation.
+    private static func isVirtual(_ device: AVCaptureDevice) -> Bool {
+        let name = device.localizedName.lowercased()
+        let model = device.modelID.lowercased()
+        return name.contains("virtual") || model.contains("virtual") || model.contains("obs")
+    }
+
     private func configure() -> Bool {
         if configured { return true }
 
-        guard let device = AVCaptureDevice.default(for: .video) else {
-            log("gaze: no video capture device")
+        guard let device = pickDevice() else {
+            log("gaze: no usable video capture device")
             return false
         }
         guard let input = try? AVCaptureDeviceInput(device: device) else {

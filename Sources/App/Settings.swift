@@ -68,8 +68,8 @@ final class Settings {
         set { defaults.set(newValue, forKey: "gazeDebugOverlay") }
     }
 
-    /// Nil until calibrated. There's no fallback: without labelled readings
-    /// there's nothing to compare against, and guessing was what made the old
+    /// Nil until calibrated. There is no fallback: without labelled readings
+    /// there is nothing to compare against, and guessing was what made the old
     /// version need a Flip Horizontal control.
     ///
     /// Cached after the first load. Construction parses the stored rows and
@@ -109,14 +109,14 @@ final class Settings {
         set {
             defaults.set(newValue.map { sample in GazeSample.axes.map { sample[keyPath: $0] } },
                          forKey: "gazeNoise")
-            // The profile's weights are scaled by this, so a cached one is
+            // This scales the profile's weights, so a cached profile is
             // stale the moment it changes.
             profileLoaded = false
         }
     }
 
     /// Display arrangement the calibration was fitted against. A mismatch
-    /// doesn't invalidate it, but the menu says so, because a map fitted on one
+    /// does not invalidate it, but the menu says so, because a map fitted on one
     /// monitor will send windows to strange places on three.
     var gazeCalibrationArrangement: String? {
         get { defaults.string(forKey: "gazeCalibrationArrangement") }
@@ -125,7 +125,7 @@ final class Settings {
 
     var isGazeCalibrated: Bool { gazeProfile != nil }
 
-    /// A calibration is saved but can't be read, because it was recorded by a
+    /// A calibration is saved but cannot be read, because it was recorded by a
     /// version whose readings meant something else. Worth telling apart from
     /// never having calibrated: the feature going quiet after an update is
     /// otherwise indistinguishable from it being broken.

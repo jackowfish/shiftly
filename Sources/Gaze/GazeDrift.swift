@@ -2,16 +2,16 @@ import AppKit
 
 /// Learns what the placement fit is currently getting wrong, from clicks.
 ///
-/// You look at what you click — the gaze literature has measured it at well
-/// under 100px — so every ordinary click is a free labelled reading, taken in
-/// today's posture rather than the one you calibrated in. That matters because
+/// You look at what you click - the gaze literature has measured it at well
+/// under 100px - so every ordinary click is a free labelled reading, taken in
+/// today's posture, not the one you calibrated in. That matters because
 /// sitting drift is half the placement error: refit against held-out sessions,
 /// a plain offset-and-gain correction per display recovered most of what a
 /// whole extra calibration would. See `tools/gaze_eval.py --sessions`.
 ///
 /// Only the correction is learned here, never the fit itself. Clicks cluster
 /// wherever your work happens to be, and a model refit on clustered labels
-/// forgets the rest of the screen; an offset and a clamped gain can't.
+/// forgets the rest of the screen; an offset and a clamped gain cannot.
 final class GazeDrift {
     static let shared = GazeDrift()
 
@@ -39,7 +39,7 @@ final class GazeDrift {
     }
 
     /// Records one accepted click. `predicted` is the raw placement estimate,
-    /// before correction — the correction maps raw estimates to truth, so
+    /// before correction - the correction maps raw estimates to truth, so
     /// feeding it corrected ones would chase its own tail.
     func note(predicted: CGPoint, actual: CGPoint, on display: CGDirectDisplayID) {
         var list = pairs[display, default: []]
@@ -51,13 +51,13 @@ final class GazeDrift {
     }
 
     /// The estimate with today's learned correction applied, clamped onto the
-    /// display so a gain can't push the dot off-screen and turn a decent
+    /// display so a gain cannot push the dot off-screen and turn a decent
     /// estimate into "not over any window".
     func corrected(_ point: CGPoint, on display: CGDirectDisplayID) -> CGPoint {
         guard let list = pairs[display], list.count >= gazeDriftMinPairs else { return point }
 
         // Newest pairs count most, on the WebGazer ramp: weight 1/sqrt(age).
-        // Old pairs fade rather than vanish, so one odd recent click can't
+        // Old pairs fade, not vanish, so one odd recent click cannot
         // swing the correction the way it could with a short hard window.
         let count = list.count
         let weights = (0..<count).map { 1.0 / Double(count - $0).squareRoot() }

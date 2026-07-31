@@ -89,7 +89,7 @@ enum Updater {
         let dest = Bundle.main.bundleURL
 
         // A quarantined app can run translocated from a read-only path that
-        // can't be replaced; fall back to revealing the download.
+        // cannot be replaced; fall back to revealing the download.
         if dest.path.contains("AppTranslocation") {
             NSWorkspace.shared.activateFileViewerSelecting([newApp])
             alert("Can't update in place",

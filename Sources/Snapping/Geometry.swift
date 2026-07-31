@@ -1,7 +1,7 @@
 import AppKit
 
 // AppKit's origin is bottom-left, the Accessibility API's is top-left.
-// flipRect converts between them (it's its own inverse).
+// flipRect converts between them (it is its own inverse).
 
 var primaryHeight: CGFloat {
     NSScreen.screens.first?.frame.height ?? 0

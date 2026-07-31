@@ -8,7 +8,7 @@ import AppKit
 /// mostly gets guessed at instead; a labelled capture makes it a scoring problem.
 /// `tools/gaze_eval.py` replays these. Files accumulate in
 /// ~/Library/Logs/Shiftly-gaze/, so a change can be tested against sessions it
-/// wasn't tuned on — which is the only way to catch a fit that flatters itself.
+/// was not tuned on - which is the only way to catch a fit that flatters itself.
 enum GazeCapture {
     static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -22,8 +22,8 @@ enum GazeCapture {
         private let started = Date()
 
         init() {
-            // v2 added lidY and changed what eyeY means: it's scaled by eye
-            // width now, not eye height. v3 adds Vision's own head pose. v4
+            // v2 added lidY and changed what eyeY means: it now divides by eye
+            // width, not eye height. v3 adds Vision's own head pose. v4
             // adds the corner-anchored per-eye pupil reads and the face box.
             // The harness keys off the version, because mixing the two eyeY
             // definitions in one training set would compare angles measured

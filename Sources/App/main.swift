@@ -27,7 +27,7 @@ func debugLog(_ message: @autoclosure () -> String) {
 }
 
 /// Timers on the gaze paths run in `.common` so menu tracking or a mouse drag
-/// can't stall a sequence that's meant to advance on its own.
+/// cannot stall a sequence that is meant to advance on its own.
 func scheduleTimer(after interval: TimeInterval,
                    repeats: Bool = false,
                    _ action: @escaping () -> Void) -> Timer {

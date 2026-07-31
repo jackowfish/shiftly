@@ -48,7 +48,7 @@ FLOOR = 0.02
 (HEAD_X, HEAD_Y, EYE_X, EYE_Y, LID_Y, FACE_YAW, FACE_PITCH, FACE_ROLL,
  EYE_LX, EYE_LY, EYE_RX, EYE_RY, FACE_X, FACE_Y, FACE_SIZE) = range(len(AXES))
 # The corner-anchored per-eye reads and the face box arrive with capture v4.
-# They're recorded, not yet fitted; the sweeps that decide whether they earn a
+# They are recorded, not yet fitted; the sweeps that decide whether they earn a
 # place go here once enough v4 captures exist.
 CORNER = [EYE_LX, EYE_LY, EYE_RX, EYE_RY]
 FACE_BOX = [FACE_X, FACE_Y, FACE_SIZE]
@@ -83,9 +83,9 @@ def load(path):
                 "style": row.get("style", "?"),
                 # A v1 capture has no lidY column and reports eyeY against a
                 # different denominator; a v2 has no head pose. Zero-filling
-                # keeps both loadable for the display-level scores, which don't
+                # keeps both loadable for the display-level scores, which do not
                 # depend on either, and a column of zeroes is dropped from the
-                # placement fits rather than making them singular.
+                # placement fits instead of making them singular.
                 "x": [float(row[a]) if a in row else 0.0 for a in AXES],
             }
         )
@@ -164,7 +164,7 @@ def train(rows):
         "no_lid": ablate([LID_Y]),
         "no_pose": ablate(POSE),
         # The other side of the same question: Vision's pose instead of the
-        # nose-over-eye-line ratios, rather than alongside them.
+        # nose-over-eye-line ratios, not alongside them.
         "pose_only": ablate([HEAD_X, HEAD_Y]),
     }
 
@@ -286,7 +286,7 @@ def shapes(own, cross, drop=()):
 def live(terms, pts):
     """Drop terms that never moved, matching GazeProfile.placement.
 
-    An older capture zero-fills the columns it doesn't have, and a column of one
+    An older capture zero-fills the columns it does not have, and a column of one
     repeated number is the constant term again, which makes the normal equations
     singular. Dropping the dead term is what lets a v2 capture still be scored
     against the current fit.
@@ -317,7 +317,7 @@ def arrangement(path):
 # The layouts Shiftly can snap to, as (name, columns, rows). Sixths is the
 # demanding one: on a 3440x1440 ultrawide its tiles are 1147x720, which is
 # where the estimate starts costing more than it saves. It is deliberately
-# still scored rather than dropped, so the number stays visible.
+# still scored, not dropped, so the number stays visible.
 LAYOUTS = [("halves", 2, 1), ("thirds", 3, 1), ("quarters", 2, 2), ("sixths", 3, 2)]
 
 # Matches gazeWindowInset in Model.swift: how far inside a window the estimate
@@ -339,9 +339,9 @@ def simulate_slots(ex, ey, full_w, full_h, cols, rows_, steps=28):
     near-miss abstains instead of guessing. That makes three outcomes, not
     two, and only one of them costs anything: doing nothing leaves the
     gesture on the window you already had, while acting on the wrong window
-    moves something you didn't mean to move.
+    moves something you did not mean to move.
 
-    Targets span the whole display rather than one slot, so that an estimate
+    Targets span the whole display, not one slot, so that an estimate
     drifting off the outside edge counts as nothing to act on, which is what
     it is. Scoring it against a slot in isolation invents a neighbouring
     window past the edge of the screen and blames the tracker for picking it.
@@ -380,7 +380,7 @@ def simulate_slots(ex, ey, full_w, full_h, cols, rows_, steps=28):
 def tile_report(plan, predict, frames):
     """Whether the dot would pick the right window slot, from the error spread.
 
-    Scored from the residuals rather than by asking which tile each calibration
+    Scored from the residuals, not by asking which tile each calibration
     dot fell in. That direct version is contaminated by where the dots happen to
     sit: a 3x3 grid puts a third of them exactly on the boundary of a 2-wide
     layout, where any error at all is a coin flip, and it scored halves below
@@ -388,8 +388,8 @@ def tile_report(plan, predict, frames):
     tracker.
 
     Two numbers, because "will it pick the right window" depends on where in the
-    window you're looking. `centre` is looking at the middle of a slot, the best
-    case and roughly what you do with a window you're reading. `anywhere` is a
+    window you look. `centre` looks at the middle of a slot, the best
+    case and roughly what you do with a window you read. `anywhere` is a
     target uniformly placed in the slot, which counts looking near its edge as
     the miss it usually is. For a uniform offset the hit rate works out to
     mean(max(0, 1 - |error| / slot)), no sampling needed.
@@ -556,7 +556,7 @@ def build_selected(sessions):
     training session out in turn and asking which fit lands closer.
 
     Selection needs sessions, not dots: an inner split within one session
-    shares that session's posture, which flatters the richer model — that's
+    shares that session's posture, which flatters the richer model - that is
     how the quadratic terms got rejected when judged on eighteen dots. Judged
     across sessions the answer is stable and differs by display: linear on
     the ultrawide, quadratic on the portrait, on the captures so far.
@@ -641,9 +641,9 @@ def touch_up(predict, calibration_bursts):
     """Offset and gain per display and axis, from a few labelled readings.
 
     This is the correction a handful of in-session ground-truth points can
-    buy — the offline stand-in for learning from clicks, since you look at
+    buy - the offline stand-in for learning from clicks, since you look at
     what you click. Gain is clamped because a session's correction points
-    won't span the screen the way a calibration does, and an extrapolated
+    will not span the screen the way a calibration does, and an extrapolated
     slope does more damage than a conservative one.
     """
     pairs = {}
@@ -697,9 +697,9 @@ def median_line(residuals):
 def sessions_report(caps, frames):
     """Leave-one-capture-out placement study across whole sessions.
 
-    Everything here scores across sessions because that's what usage is: the
+    Everything here scores across sessions because that is what usage is: the
     profile was fitted yesterday and the press happens today. Scoring within
-    one capture can't see the drift between the two, and the drift turned out
+    one capture cannot see the drift between the two, and the drift turned out
     to be most of the error.
     """
     names = list(caps)
@@ -769,7 +769,7 @@ def placement_report(train_rows, test_rows, weights, frames):
     """How far the drawn dot lands from where you were actually looking.
 
     Reported alongside the spread of what it predicts, because the failure this
-    was written for isn't inaccuracy — it's a dot pinned near the middle of the
+    was written for is not inaccuracy - it is a dot pinned near the middle of the
     screen, which can look respectable on median error while carrying no
     information at all.
     """
@@ -782,7 +782,7 @@ def placement_report(train_rows, test_rows, weights, frames):
         """Fit both placement methods, optionally holding one dot out.
 
         With sixteen dots total, scoring a fit on the very dots it was fitted to
-        flatters it. When there's only one capture, each dot is predicted by a
+        flatters it. When there is only one capture, each dot is predicted by a
         fit that never saw it.
         """
         idw_refs = {}
@@ -792,8 +792,8 @@ def placement_report(train_rows, test_rows, weights, frames):
             idw_refs.setdefault(display, []).append((x, point))
 
         # Each variant is the shipped fit with one group of axes withheld, so
-        # the placement table says whether a group earned its parameters rather
-        # than only whether the whole thing moved.
+        # the placement table says whether a group earned its parameters, not
+        # only whether the whole thing moved.
         # What ships is the pose-free fit. The rest are kept so the measurement
         # that settled it stays reproducible: Vision's head pose is recorded in
         # every capture and every way of fitting against it scored worse on a
@@ -890,7 +890,7 @@ def placement_report(train_rows, test_rows, weights, frames):
               f"{spread(py_):>10.0f} /{spread(ty_):>10.0f}")
 
     # Pooling the two displays hides the thing worth knowing. The axes that cap
-    # window accuracy are one per display and they aren't the same axis, so a
+    # window accuracy are one per display and they are not the same axis, so a
     # change that fixes one and breaks the other reads as no change at all in
     # the median above.
     print("\nplacement by display and axis, median px")
@@ -930,7 +930,7 @@ def main():
         raise SystemExit(f"no captures in {CAPTURES} — calibrate once to record one")
 
     # A cancelled calibration writes a file too. Training on one scores at
-    # chance and looks like a broken classifier rather than a broken input.
+    # chance and looks like a broken classifier, not a broken input.
     full = max((len(coverage(load(f))) for f in files), default=0)
     keep = [f for f in files if len(coverage(load(f))) == full]
     for dropped in [f for f in files if f not in keep]:
@@ -950,7 +950,7 @@ def main():
         return
 
     # Two or more files: train on all but the last, test on the last, so the
-    # score says whether a metric generalises rather than whether it memorised.
+    # score says whether a metric generalises, not whether it memorised.
     if len(files) > 1:
         train_rows = [r for f in files[:-1] for r in load(f)]
         test_rows = load(files[-1])

@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     /// The gaze readout is the one menu row whose text changes on its own, so
-    /// it's held onto and retitled while the menu is up. Everything else in the
+    /// it is held onto and retitled while the menu is up. Everything else in the
     /// menu only changes in response to a click, which rebuilds it anyway.
     private var gazeStatusItem: NSMenuItem?
     private var gazeStatusTimer: Timer?
@@ -183,9 +183,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !GazeTracker.shared.isRunning {
             return "Ready (camera starts when you hold a modifier)"
         }
+        // A black feed would otherwise read as "no face visible", which points
+        // you at your chair instead of at the camera cable.
+        if GazeTracker.shared.blackedOut {
+            return "Camera is on but the picture is black, check its connection"
+        }
         // Camera is up, so the two ways of having no answer are worth telling
         // apart: nobody in frame at all, versus a face sitting somewhere the
-        // calibration can't call between two displays.
+        // calibration cannot call between two displays.
         return GazeFocus.shared.isSeeingFace
             ? "Looking at: too close to call"
             : "Looking at: no face visible"
@@ -211,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A live readout instead of settings nobody could be expected to
         // interpret. If this says the wrong display while the menu is open,
-        // recalibrating is the answer, and that's the only knob left.
+        // recalibrating is the answer, and that is the only knob left.
         let statusItem = menu.addItem(withTitle: gazeStatusText(), action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
         gazeStatusItem = statusItem

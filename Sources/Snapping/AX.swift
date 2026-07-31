@@ -8,9 +8,9 @@ func focusedWindow() -> AXUIElement? {
         log("no frontmost application")
         return nil
     }
-    // Our own overlay and calibration windows are frontmost while they're up,
+    // Our own overlay and calibration windows are frontmost while they are up,
     // and they have no AX window to snap. Returning nil here lets the caller
-    // fall back rather than reporting a missing permission.
+    // fall back instead of reporting a missing permission.
     guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
         debugLog("frontmost app is Shiftly itself, no window to act on")
         return nil

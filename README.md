@@ -18,9 +18,9 @@ Window managers like Swish and Rectangle read the keyboard through a CGEventTap.
 
 Shiftly avoids the event tap entirely (but not w/o some drawbacks). 
 
-Hotkeys come in through Carbon's `RegisterEventHotKey`, which WindowServer dispatches even while Secure Input is held (same mechanism that keeps Spotlight's Cmd+Space alive in a password field). Release detection polls `CGEventSource.flagsState`, a state query rather than an event stream, and window moves go through the Accessibility API. These all together lets us avoid the Secure Input problems. 
+Hotkeys come in through Carbon's `RegisterEventHotKey`, which WindowServer dispatches even while Secure Input is held (same mechanism that keeps Spotlight's Cmd+Space alive in a password field). Release detection polls `CGEventSource.flagsState`, a state query, not an event stream, and window moves go through the Accessibility API. These all together lets us avoid the Secure Input problems. 
 
-This _does_ mean that we are grabbing these modifier keys in essentially any context. You can change the modifers in the menu bar settings to avoid conflicts with other application keybindings if you'd like.
+This _does_ mean that we are grabbing these modifier keys in essentially any context. You can change the modifiers in the menu bar settings to avoid conflicts with other app keybindings if you'd like.
 
 ## Gestures
 
@@ -34,7 +34,7 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 
 Off by default, under Eye Tracking (Beta) in the menu bar. It changes which window the gestures above act on. Look at a window, hold your modifier & tap an arrow, and it grabs that one instead of whatever you were last focused on.
 
-I'm using whatever camera your mac is plugged into + Vision's face landmarks, all on device. It reads your head angle from where your nose sits relative to your eye line, plus pupil offset and how open your eyelids are. The eyes matter the most because a webcam can't see your head turn far enough to face a monitor off to one side (i.e. dual / triple monitor setups)
+I'm using whatever camera your mac is plugged into + Vision's face landmarks, all on device. It reads your head angle from where your nose sits relative to your eye line, plus pupil offset, and how open your eyelids are. The eyes matter the most because a webcam can't see your head turn far enough to face a monitor off to one side (dual or triple monitor setups)
 
 ### Calibrating
 
@@ -72,7 +72,7 @@ Grant Accessibility when prompted (System Settings, Privacy & Security, Accessib
 
 The build signs with a `Shiftly Dev Signing` certificate if one exists in your keychain, and falls back to ad-hoc signing otherwise.
 
-`build.sh` is what produces the app: SwiftPM can't assemble a `.app`, since that needs the Info.plist, the icon, the entitlements and a signature.
+`build.sh` is what produces the app: SwiftPM can't assemble a `.app`, since that needs the Info.plist, the icon, the entitlements, and a signature.
 
 There's a `Package.swift` anyway, purely so editors resolve the module. Without it SourceKit analyses each file by itself and reports every cross-file symbol as missing. 
 
@@ -91,7 +91,7 @@ Package.swift       for editors and `swift build`, not for shipping
 
 ## Settings
 
-All settings are in the menu bar item. Currently thats per-layer modifier combos, placement rectangle color (or off entirely, which moves windows live on each press), animation speed, and the eye tracking options above. Settings persist across restarts.
+All settings are in the menu bar item. Currently that's per-layer modifier combos, placement rectangle color (or off entirely, which moves windows live on each press), animation speed, and the eye tracking options above. Settings persist across restarts.
 
 ## License
 

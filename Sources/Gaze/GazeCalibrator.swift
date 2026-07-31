@@ -21,7 +21,7 @@ final class GazeCalibrator {
     private var capture: GazeCapture.Session?
     private var index = 0
     /// Counting in to the next group, and the target index already counted in
-    /// for, so finishing a countdown doesn't immediately start another.
+    /// for, so finishing a countdown does not immediately start another.
     private var countdown = 0
     private var countedIn = -1
     private var collecting = false
@@ -56,8 +56,8 @@ final class GazeCalibrator {
         countdown = 0
         countedIn = -1
 
-        // Style outermost, so each pass is one continuous instruction rather
-        // than asking you to switch how you're sitting at every dot.
+        // Style outermost, so each pass is one continuous instruction instead
+        // of asking you to switch how you sit at every dot.
         targets = GazeCalibrationStyle.allCases.flatMap { style in
             NSScreen.screens.flatMap { screen -> [(CGPoint, CGDirectDisplayID, GazeCalibrationStyle)] in
                 let area = usableFrame(of: screen)
@@ -89,7 +89,7 @@ final class GazeCalibrator {
         watchdog = scheduleTimer(after: budget) { [weak self] in
             guard let self, self.running else { return }
             log("gaze: calibration stalled at target \(self.index + 1)/\(self.targets.count)")
-            // Save rather than discard: finish() checks coverage anyway, so a
+            // Save, not discard: finish() checks coverage anyway, so a
             // stall on the last target still keeps a usable calibration.
             self.finish(save: true)
         }
@@ -112,9 +112,9 @@ final class GazeCalibrator {
         collected = []
 
         // Count in whenever the run moves to another screen or into the second
-        // pass. Without it the first dot of each group appears on a display you
-        // may not be looking at yet, and its reading is whatever your eyes were
-        // doing on the way there.
+        // pass. Without it the first dot of each group appears on a display
+        // your eyes have not reached yet, and its reading is whatever they
+        // did on the way there.
         let previous = index > 0 ? targets[index - 1] : nil
         let newGroup = previous.map { $0.display != target.display || $0.style != target.style } ?? true
         if newGroup && countedIn != index {
@@ -167,7 +167,7 @@ final class GazeCalibrator {
             }
             references.append(GazeReference(display: display, sample: mean, point: point))
             // The spread inside a single burst, while you held still on one dot,
-            // is how precisely each axis can be measured at all. That's the
+            // is how precisely each axis can be measured at all. That is the
             // right scale for comparing readings; the spread *across* a
             // display's dots is where you looked, which is signal, not noise.
             noise.append(GazeSample.perAxis { axis in spread(collected.map { $0[keyPath: axis] }) })
@@ -180,8 +180,8 @@ final class GazeCalibrator {
         advance()
     }
 
-    /// Median jitter per axis across every burst. Median rather than mean so a
-    /// single burst where a blink wrecked the landmarks doesn't set the scale
+    /// Median jitter per axis across every burst. Median, not mean so a
+    /// single burst where a blink wrecked the landmarks does not set the scale
     /// for the whole profile.
     private func pooledNoise() -> GazeSample? {
         guard !noise.isEmpty else { return nil }
@@ -225,10 +225,10 @@ final class GazeCalibrator {
 
         if save, !references.isEmpty, covered == expected {
             Settings.shared.gazeNoise = pooledNoise()
-            // A new run joins the profile rather than replacing it, as long as
+            // A new run joins the profile instead of replacing it, as long as
             // the desk is still the same desk. Runs sample different sitting
             // postures, and pooling them was worth more than any model change
-            // measured so far — recalibrating makes the tracker better, not
+            // measured so far - recalibrating makes the tracker better, not
             // just different. A changed arrangement starts over: those readings
             // describe displays that are no longer where they were.
             let arrangement = screenArrangementFingerprint()

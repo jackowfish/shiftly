@@ -14,16 +14,16 @@ struct GazeSample {
     /// Pupil displacement from the eye centre, in half eye-widths, about -1...1.
     ///
     /// Both axes divide by the eye's *width*, including the vertical one. Eye
-    /// height moves with the thing being measured — lids close as you look down,
+    /// height moves with the thing being measured - lids close as you look down,
     /// so the box shrinks exactly when the pupil drops, flattening the signal
-    /// and amplifying its noise. Width is set by the corners, which don't move.
+    /// and amplifying its noise. Width is set by the corners, which do not move.
     var eyeX = 0.0
     var eyeY = 0.0
     /// How open the lids are, as eye height over inter-ocular distance.
     ///
     /// A second, independent read on the vertical axis, which is the one that
-    /// costs window-level accuracy. Owes nothing to finding the pupil: it's
-    /// measured across the whole eye contour rather than from one point inside a
+    /// costs window-level accuracy. Owes nothing to finding the pupil: it is
+    /// measured across the whole eye contour, not from one point inside a
     /// region a third as tall as it is wide. Worth 182px against 142px.
     var lidY = 0.0
 
@@ -31,12 +31,12 @@ struct GazeSample {
     /// but not fitted against; `GazeProfile.fitted` has the measurements.
     ///
     /// The old objection to these was that the sign convention is undocumented
-    /// and flips with mirroring. That doesn't hold: every use compares a reading
+    /// and flips with mirroring. That does not hold: every use compares a reading
     /// against labelled readings or a fit solved from them, and calibration
     /// absorbs an inverted sign without noticing.
     ///
-    /// Only ever populated by a revision 3 rectangles pass. See `captureOutput`
-    /// — getting that wrong yields plausible numbers rather than none.
+    /// Populated only by a revision 3 rectangles pass. See `captureOutput`
+    /// - getting that wrong yields plausible numbers, not none.
     var faceYaw = 0.0
     var facePitch = 0.0
     var faceRoll = 0.0
@@ -44,9 +44,9 @@ struct GazeSample {
     /// Pupil displacement from the midpoint of the eye's two corners, per eye,
     /// in half inter-corner widths, with the axes rotated to follow the eye
     /// line. Recorded but not yet fitted, like the pose angles: the gaze
-    /// literature anchors the pupil to the corners because they're rigid — the
+    /// literature anchors the pupil to the corners because they are rigid - the
     /// eye's bounding box tracks the lids, which move with vertical gaze, and
-    /// that coupling is systematic error the current features can't remove.
+    /// that coupling is systematic error the current features cannot remove.
     /// Whether these earn a place in the fit is decided the same way the pose
     /// angles were: captures first, then `tools/gaze_eval.py`.
     var eyeLX = 0.0
@@ -56,7 +56,7 @@ struct GazeSample {
 
     /// Where the face sits in the frame and how large it is, from the landmark
     /// observation's bounding box. Head translation and camera distance in
-    /// other words — axes nothing else here measures. `headX` conflates
+    /// other words - axes nothing else here measures. `headX` conflates
     /// sliding your chair with turning your head; these separate the two.
     /// Recorded, not fitted, same policy as above.
     var faceX = 0.0
@@ -64,7 +64,7 @@ struct GazeSample {
     var faceSize = 0.0
 
     /// Every axis a reading carries, in stored and captured order. Enumerated
-    /// once here rather than at each of the eight places a sample gets averaged,
+    /// once here, not at each of the eight places a sample gets averaged,
     /// differenced, serialised or written to CSV. New axes go at the end, so a
     /// capture's columns stay a prefix of any later version's.
     static let axes: [WritableKeyPath<GazeSample, Double>] =
@@ -84,7 +84,7 @@ struct GazeSample {
 }
 
 /// Front camera plus Vision face landmarks, on device. Runs only while
-/// something is listening, so the camera light tracks actual use.
+/// something listens, so the camera light tracks actual use.
 final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     static let shared = GazeTracker()
 
@@ -93,8 +93,8 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
 
     private(set) var isRunning = false
 
-    /// Recent frames, newest last. Kept here rather than derived from the
-    /// callback so whoever is listening can't change what a decision draws on.
+    /// Recent frames, newest last. Kept here, not derived from the
+    /// callback so a listener cannot change what a decision draws on.
     private var history: [(at: TimeInterval, sample: GazeSample)] = []
 
     /// Frames from the last `window` seconds, newest last.
@@ -115,14 +115,67 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     private var mirrored = false
     private var lingerTimer: Timer?
 
+    // MARK: Health
+
+    /// The device the session was configured on, held so a disconnect
+    /// notification can be matched against it.
+    private var device: AVCaptureDevice?
+
+    /// Whether anyone wants the camera up, as distinct from whether it is.
+    /// Unplugging a dock mid-run can leave `isRunning` false with nobody
+    /// having called stop(); the reconnect path uses this to come back.
+    private var wantsCamera = false
+
+    /// Uptime of the last frame delivered, face or not. `isRunning` says the
+    /// session was told to run; this says frames actually arrive. A dock
+    /// disconnect used to fail exactly in that gap - the session looked fine
+    /// and delivered nothing until the app was relaunched.
+    private var lastFrameAt: TimeInterval = 0
+    private var startedAt: TimeInterval = 0
+    private var healthTimer: Timer?
+    private var lastRebuildAt: TimeInterval = 0
+    private var rebuilding = false
+
+    /// Consecutive black frames so far, and whether the run is long enough to
+    /// call the feed dead. Black is a real failure mode: a camera that half
+    /// survives a dock change keeps streaming frames with nothing in them,
+    /// which "no face visible" misdiagnoses.
+    private var blackFrames = 0
+    private(set) var blackedOut = false
+
     private override init() {
         super.init()
         // Revision 3 is the 76-point constellation, the one with pupils.
         request.revision = VNDetectFaceLandmarksRequestRevision3
         // Revision 3 is also the only one that computes pitch at all, and the
-        // only one that reports any of the three angles continuously rather
-        // than snapped to 45° buckets.
+        // only one that reports any of the three angles continuously, not
+        // snapped to 45° buckets.
         rectangles.revision = VNDetectFaceRectanglesRequestRevision3
+
+        // The dock cases. Losing the device in use rebuilds onto whatever
+        // remains; a camera arriving rebuilds onto the new default, so
+        // re-docking hands the feed back to the camera the profile was
+        // calibrated against instead of staying on the fallback.
+        let center = NotificationCenter.default
+        center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
+                           object: nil, queue: .main) { [weak self] note in
+            guard let self, let gone = note.object as? AVCaptureDevice, gone == self.device else { return }
+            self.rebuild("\(gone.localizedName) disconnected")
+        }
+        center.addObserver(forName: AVCaptureDevice.wasConnectedNotification,
+                           object: nil, queue: .main) { [weak self] note in
+            guard let self, self.wantsCamera,
+                  let arrived = note.object as? AVCaptureDevice, arrived.hasMediaType(.video) else { return }
+            if !self.isRunning || AVCaptureDevice.default(for: .video) != self.device {
+                self.rebuild("\(arrived.localizedName) connected")
+            }
+        }
+        center.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
+                           object: session, queue: .main) { [weak self] note in
+            guard let self, self.wantsCamera else { return }
+            let error = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            self.rebuild("session error: \(error?.localizedDescription ?? "unknown")")
+        }
     }
 
     // MARK: Lifecycle
@@ -142,10 +195,11 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         }
     }
 
-    /// Brings the camera up if it isn't already. Safe to call repeatedly.
+    /// Brings the camera up if it is not already. Safe to call repeatedly.
     func start() {
         lingerTimer?.invalidate()
         lingerTimer = nil
+        wantsCamera = true
         guard !isRunning else { return }
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -167,7 +221,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     }
 
     /// Drops the camera after a short grace period, so a burst of sessions
-    /// doesn't restart it repeatedly.
+    /// does not restart it repeatedly.
     func stopSoon() {
         guard isRunning, !Settings.shared.gazeCameraAlwaysOn else { return }
         lingerTimer?.invalidate()
@@ -179,6 +233,11 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
     func stop() {
         lingerTimer?.invalidate()
         lingerTimer = nil
+        wantsCamera = false
+        healthTimer?.invalidate()
+        healthTimer = nil
+        blackFrames = 0
+        blackedOut = false
         guard isRunning else { return }
         isRunning = false
         history = []
@@ -190,8 +249,100 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         guard configure() else { return }
         isRunning = true
         history = []
+        startedAt = ProcessInfo.processInfo.systemUptime
+        lastFrameAt = 0
+        blackFrames = 0
+        blackedOut = false
         queue.async { self.session.startRunning() }
+        healthTimer?.invalidate()
+        healthTimer = scheduleTimer(after: 1.0, repeats: true) { [weak self] in self?.checkHealth() }
         log("gaze: camera started")
+    }
+
+    /// Tears the session down to nothing and brings it back on the current
+    /// default camera. Every recovery path funnels through here: device gone,
+    /// device arrived, session error, stalled frames, black frames.
+    private func rebuild(_ reason: String) {
+        guard !rebuilding else { return }
+        rebuilding = true
+        lastRebuildAt = ProcessInfo.processInfo.systemUptime
+        log("gaze: restarting camera (\(reason))")
+        isRunning = false
+        history = []
+        configured = false
+        device = nil
+        blackFrames = 0
+        blackedOut = false
+        healthTimer?.invalidate()
+        healthTimer = nil
+        queue.async {
+            self.session.stopRunning()
+            self.session.beginConfiguration()
+            for input in self.session.inputs { self.session.removeInput(input) }
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            self.session.commitConfiguration()
+            DispatchQueue.main.async {
+                self.rebuilding = false
+                // If configure() fails here - the camera left with the dock -
+                // the connected notification retries when one returns.
+                if self.wantsCamera { self.beginSession() }
+            }
+        }
+    }
+
+    /// The watchdog for failures no notification announces. A session that
+    /// stops delivering, or delivers only black, is indistinguishable from a
+    /// healthy one to every other code path.
+    private func checkHealth() {
+        guard isRunning, !rebuilding else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastRebuildAt > gazeCameraRetryEvery else { return }
+        let lastSeen = max(lastFrameAt, startedAt)
+        if now - lastSeen > gazeCameraStallAfter {
+            rebuild("no frames for \(Int(now - lastSeen))s")
+        } else if blackedOut {
+            rebuild("feed is black")
+        }
+    }
+
+    /// Per-frame health bookkeeping, on the main queue so the watchdog and
+    /// the menu read consistent state.
+    private func noteFrame(luminance: Double) {
+        lastFrameAt = ProcessInfo.processInfo.systemUptime
+        if luminance < gazeCameraBlackLevel {
+            blackFrames += 1
+            if blackFrames == gazeCameraBlackFrames {
+                blackedOut = true
+                log("gaze: camera feed has gone black")
+            }
+        } else if blackFrames > 0 {
+            if blackedOut { log("gaze: camera feed is back") }
+            blackFrames = 0
+            blackedOut = false
+        }
+    }
+
+    /// Mean brightness over a sparse grid, 0...1. Sixty-four pixels of a
+    /// BGRA frame - little enough work to run on every frame before Vision.
+    private func meanLuminance(of buffer: CVPixelBuffer) -> Double {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return 0 }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        guard width > 0, height > 0 else { return 0 }
+        let data = base.assumingMemoryBound(to: UInt8.self)
+        var total = 0
+        var count = 0
+        for row in stride(from: height / 16, to: height, by: max(1, height / 8)) {
+            for col in stride(from: width / 16, to: width, by: max(1, width / 8)) {
+                let pixel = row * rowBytes + col * 4
+                total += Int(data[pixel]) + Int(data[pixel + 1]) + Int(data[pixel + 2])
+                count += 3
+            }
+        }
+        return count > 0 ? Double(total) / Double(count) / 255 : 0
     }
 
     private func configure() -> Bool {
@@ -250,6 +401,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
 
         session.commitConfiguration()
         configured = true
+        self.device = device
         log("gaze: using \(device.localizedName), mirrored: \(mirrored)")
         return true
     }
@@ -261,16 +413,22 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
                        from connection: AVCaptureConnection) {
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        let luminance = meanLuminance(of: buffer)
+        DispatchQueue.main.async { self.noteFrame(luminance: luminance) }
+        // A black frame has no face in it. Skipping Vision keeps a dead feed
+        // from burning two detector passes per frame while it lasts.
+        guard luminance >= gazeCameraBlackLevel else { return }
+
         // Two passes on two separate handlers, and both details matter.
         //
         // Pose needs its own rectangles pass: a landmarks request runs an older
         // detector that snaps yaw to 45° buckets, roll to 30°, and computes no
         // pitch at all. Only revision 3 reports the angles continuously.
         //
-        // They can't share a handler, because VNImageRequestHandler caches face
+        // They cannot share a handler, because VNImageRequestHandler caches face
         // detection and serves the first request's answer to the second whatever
         // revision it asked for. That fails silently with plausible numbers: it
-        // read as "Vision can't do this on this camera" for a while, revisions 1,
+        // read as "Vision cannot do this on this camera" for a while, revisions 1,
         // 2 and 3 agreeing precisely because only one of them ever ran.
         //
         // Seeding the landmarks request from the pose result would be cheaper
@@ -329,9 +487,9 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         var eyeX = 0.0
         var eyeY = 0.0
         var eyeCount = 0.0
-        // Aperture is measured whether or not the pupil was found, since it
+        // Aperture is measured even when the pupil was not found, since it
         // needs only the eye contour. A blink that loses the pupil still says
-        // something about where you're looking.
+        // something about where you are looking.
         var lidY = 0.0
         var lidCount = 0.0
         for (region, pupil) in [(leftEye, landmarks.leftPupil), (rightEye, landmarks.rightPupil)] {
@@ -358,7 +516,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         // so the debug trace reads sensibly. Nothing downstream depends on it:
         // every coefficient these feed is solved from calibration, which
         // absorbs a sign. A missing angle stays 0, and a constant axis is
-        // dropped from the fit rather than making it singular.
+        // dropped from the fit instead of making it singular.
         sample.faceYaw = flip * (pose?.yaw?.doubleValue ?? 0)
         sample.facePitch = pose?.pitch?.doubleValue ?? 0
         sample.faceRoll = flip * (pose?.roll?.doubleValue ?? 0)
@@ -366,7 +524,7 @@ final class GazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate 
         // The corner-anchored reads. Anchoring to the corner midpoint and
         // rotating the axes onto the corner line makes them roll-free and
         // lid-free by construction; a missing pupil leaves them 0, which the
-        // fit drops as a dead column rather than mismeasuring.
+        // fit drops as a dead column instead of mismeasuring.
         if let read = cornerOffset(leftEye, pupil: landmarks.leftPupil, flip: flip) {
             sample.eyeLX = read.x
             sample.eyeLY = read.y

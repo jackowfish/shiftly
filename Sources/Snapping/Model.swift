@@ -64,7 +64,7 @@ let animationChoices: [(title: String, duration: Double)] = [
 
 /// Floor on an axis's measured within-display spread when weights are learned
 /// from calibration, so an axis that happened to sit still for five readings
-/// can't be handed an enormous weight.
+/// cannot be handed an enormous weight.
 let gazeAxisFloor = 0.02
 
 /// The nearest display has to be at least this much closer than the runner-up
@@ -72,7 +72,7 @@ let gazeAxisFloor = 0.02
 let gazeMargin = 0.85
 
 /// The decision is made at the instant a key is pressed, from the newest frames
-/// only, rather than from a running estimate that has to settle first.
+/// only, not from a running estimate that has to settle first.
 ///
 /// This is the whole latency budget. An earlier version smoothed frames into a
 /// moving average and made the winner hold a lead before it counted, stacking
@@ -80,7 +80,7 @@ let gazeMargin = 0.85
 /// acts on the estimate continuously, so the damping bought nothing: the only
 /// moment the answer matters is the press.
 ///
-/// Median rather than mean, because a median tracks a step as soon as most of
+/// Median, not mean, because a median tracks a step as soon as most of
 /// its window is past it while still discarding one bad landmark fit.
 let gazeDecisionFrames = 3
 let gazeDecisionWindow: TimeInterval = 0.4
@@ -94,7 +94,7 @@ let gazeHistoryWindow: TimeInterval = 1.0
 ///
 /// Webcam gaze is good to a few degrees, a couple of hundred pixels at desk
 /// distance, so a dot near the seam between two windows carries no real opinion
-/// about which side it's on. Requiring it properly inside trades a few "did
+/// about which side it is on. Requiring it properly inside trades a few "did
 /// nothing" presses for not flipping as you read along a shared edge.
 let gazeWindowInset: CGFloat = 80
 
@@ -105,60 +105,79 @@ let gazeClickOverride: TimeInterval = 2.0
 
 /// Ridge penalty for the quadratic placement fit, scaled by the reading count.
 /// Swept offline against held-out sessions; anything within a decade of this
-/// scores the same, so it isn't delicate.
+/// scores the same, so it is not delicate.
 let gazeRidgeLambda = 0.01
 
 /// Calibration runs kept in the profile, newest first. Pooling runs is worth
-/// more than any model change measured so far — each run samples a different
+/// more than any model change measured so far - each run samples a different
 /// sitting posture, and a fit that has seen only one mistakes it for the truth
-/// — but a run from months ago describes a desk that may no longer exist.
+/// - but a run from months ago can describe a desk that no longer exists.
 let gazeSessionLimit = 6
 
 /// Calibration burst frames whose eye aperture falls below this fraction of
 /// the burst's median are dropped as blinks before averaging. Lids matter to
-/// the fit — aperture is a real vertical signal — so the threshold sits well
+/// the fit - aperture is a real vertical signal - so the threshold sits well
 /// under the range normal looking produces.
 let gazeBlinkLidFraction = 0.7
 
 /// A click teaches placement, since you look at what you click. Each accepted
 /// click pairs the estimate with the click point, and an offset-and-gain
 /// correction per display and axis is refit from the newest pairs. This is
-/// what absorbs session drift — sitting differently today than when you
-/// calibrated — which measured as half the placement error.
+/// what absorbs session drift - sitting differently today than when you
+/// calibrated - which measured as half the placement error.
 ///
 /// A pair is accepted only when the estimate is steady (the eye axes' spread
-/// over the decision window within a few times their calibrated jitter — a
+/// over the decision window within a few times their calibrated jitter - a
 /// glance-away mid-click fails this) and the estimate lands near the click,
 /// so a click made while genuinely looking elsewhere teaches nothing.
 let gazeDriftAcceptRadius: CGFloat = 500
 let gazeDriftSteadyFactor = 4.0
 let gazeDriftPairLimit = 40
-/// Offset needs a few pairs before it's trusted; gain also needs the pairs to
+/// Offset needs a few pairs before it is trusted; gain also needs the pairs to
 /// span a real fraction of the display, since a slope fitted to a cluster of
 /// clicks in one corner extrapolates disaster across the rest of the screen.
 let gazeDriftMinPairs = 4
 let gazeDriftGainSpan = 0.15
 let gazeDriftGainRange = 0.5...1.5
 
-/// Cap on how long a window query to another app may block. These are
-/// synchronous calls into processes that might be busy, and they run on the
+/// Cap on how long a window query to another app can block. These are
+/// synchronous calls into processes that can be busy, and they run on the
 /// press, so an app mid-beachball would otherwise stall the gesture.
 let gazeAXTimeout: Float = 0.1
 
 /// Modifier poll, used only to decide when to warm the camera. A flagsState
-/// query, not an event tap, so Secure Input can't blind it.
+/// query, not an event tap, so Secure Input cannot blind it.
 ///
 /// The dwell exists because ⌘ is a prefix of the default layers and you press
 /// it all day for Cmd+C and Cmd+Tab. Warming on every one of those left the
 /// camera effectively always on. A real gesture holds it past the dwell; a
-/// copy-paste doesn't.
+/// copy-paste does not.
 let gazePoll: TimeInterval = 0.04
 let gazeWarmDwell = 5
 
 /// How long the camera stays up after the modifiers go, in on-demand mode.
 let gazeCameraLinger: TimeInterval = 5
 
-/// A gaze estimate older than this is thrown away rather than acted on, so a
+/// Camera health. Undocking can kill the device behind a running session
+/// without a disconnect notification ever matching it, leaving a session that
+/// looks fine and delivers nothing - or frames of pure black - until relaunch.
+/// A session with no frames for this long is torn down and rebuilt on the
+/// current default camera.
+let gazeCameraStallAfter: TimeInterval = 3
+
+/// Mean sampled brightness (0...1) below which a frame counts as black, and
+/// how many in a row mean the feed is dead, not the lens briefly
+/// covered. A real camera in a dark room still auto-exposes well above this.
+let gazeCameraBlackLevel = 0.03
+let gazeCameraBlackFrames = 45
+
+/// Floor between watchdog-triggered rebuilds, so a camera that is genuinely
+/// covered or absent does not cycle the session and its light every few
+/// seconds. Reconnect notifications bypass this: a returning camera is a
+/// real event, not a retry.
+let gazeCameraRetryEvery: TimeInterval = 10
+
+/// A gaze estimate older than this is thrown away, not acted on, so a
 /// gesture that beats the camera's warmup falls back to normal focus instead of
 /// retargeting off a stale reading.
 let gazeStaleAfter: TimeInterval = 1.0
@@ -169,13 +188,13 @@ let gazeDotTrail = 12
 let gazeDotRedraw: TimeInterval = 1.0 / 20
 
 /// How often the menu's gaze readout retitles itself while the menu is open.
-/// Fast enough to follow a glance, slow enough not to look like it's flickering.
+/// Fast enough to follow a glance, slow enough not to look like it is flickering.
 let gazeStatusRefresh: TimeInterval = 0.2
 
 /// Calibration runs twice, once holding your head still and once moving
 /// naturally, and keeps both sets of readings.
 ///
-/// One pass isn't enough either way round. Head-free teaches it that yaw is the
+/// Neither pass is enough on its own. Head-free teaches it that yaw is the
 /// signal, so a glance without a head turn registers nothing. Still-only
 /// inverts it: a head-free session replayed against a still-only profile puts
 /// about a third of frames on the wrong display, because the head absorbs angle
@@ -187,8 +206,8 @@ enum GazeCalibrationStyle: CaseIterable {
     ///
     /// "For this whole pass" is deliberate: holding still within one screen and
     /// re-aiming at the next makes this a second copy of the free pass, and the
-    /// eye-only extreme never gets recorded. So is "as far as is comfortable" —
-    /// a reading taken at the limit of your eyes is one you'll never reproduce.
+    /// eye-only extreme never gets recorded. So is "as far as is comfortable" -
+    /// a reading taken at the limit of your eyes is one you will never reproduce.
     var hint: String {
         switch self {
         case .still:
@@ -201,7 +220,7 @@ enum GazeCalibrationStyle: CaseIterable {
 
     /// Heading over the count-in. The still pass must not say "look at" the way
     /// the free pass does, because that reads as an instruction to turn towards
-    /// the screen, which is the one thing this pass is trying to exclude.
+    /// the screen, which is exactly what this pass must exclude.
     func countdownTitle(for display: String) -> String {
         switch self {
         case .still: return "Eyes only to \(display), head stays put"
@@ -219,7 +238,7 @@ enum GazeCalibrationStyle: CaseIterable {
 
 /// Targets per display per pass, as fractions of its frame: a 3x3 grid.
 ///
-/// Four corners can fit each axis from its own terms but can't pay for the cross
+/// Four corners can fit each axis from its own terms but cannot pay for the cross
 /// terms or see any curvature, and two rows make the vertical fit a straight
 /// line through two clusters with no third level to contradict it. That was
 /// survivable while the job was picking a display and became the limit as soon
@@ -240,10 +259,10 @@ let gazeCalibrationCollect: TimeInterval = 0.6
 
 /// Counted in on each display before its run of dots starts.
 ///
-/// Without it the first dot of a group lands on a screen you may not be looking
-/// at yet, and its reading is whatever your eyes were doing on the way there —
+/// Without it the first dot of a group lands on a screen your eyes have not
+/// reached yet, and its reading is whatever they did on the way there -
 /// a bad reference that then gets matched against for the life of the profile.
-/// It's also where the instruction for the pass gets read, since the two passes
+/// It is also where the instruction for the pass gets read, since the two passes
 /// ask you to sit differently.
 let gazeCalibrationCountdown = 3
 let gazeCalibrationTick: TimeInterval = 0.8

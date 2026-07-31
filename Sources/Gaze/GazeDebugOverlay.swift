@@ -1,14 +1,14 @@
 import AppKit
 
-/// A dot showing where the tracker currently thinks you're looking, plus the
+/// A dot showing where the tracker currently thinks you are looking, plus the
 /// numbers behind it. Purely a diagnostic: nothing reads it, and it changes
 /// nothing about how gestures behave.
 ///
 /// The dot is much rougher than the display choice it sits on. Calibration pins
 /// the mapping down at a handful of points per screen and the dot interpolates
-/// between them, so treat it as "leaning that way" rather than a cursor. Which
-/// display it's on is the part that's actually decided, and the part worth
-/// watching: if the dot sits on the wrong screen, that's the bug.
+/// between them, so treat it as "leaning that way", not a cursor. Which
+/// display it is on is the part that is actually decided, and the part worth
+/// watching: if the dot sits on the wrong screen, that is the bug.
 final class GazeDebugOverlay {
     static let shared = GazeDebugOverlay()
 
@@ -24,7 +24,7 @@ final class GazeDebugOverlay {
         let wanted = Settings.shared.gazeEnabled && Settings.shared.gazeDebugOverlay
         guard wanted else { return teardown() }
 
-        // Rebuilt rather than moved when the layout changes: these are cheap,
+        // Rebuilt, not moved when the layout changes: they cost little,
         // and a stale frame would put the dot in the wrong place entirely.
         teardown()
         for screen in NSScreen.screens {
@@ -53,7 +53,7 @@ final class GazeDebugOverlay {
     }
 
     /// Taken down while calibration owns the screens, so the two full-screen
-    /// overlays don't draw over each other.
+    /// overlays do not draw over each other.
     func hide() {
         teardown()
     }
@@ -80,14 +80,14 @@ final class GazeDebugOverlay {
         let reading = GazeFocus.shared.reading()
         let chosen = GazeFocus.shared.gazedDisplay()
         // Asked without the display a gesture is currently on, so the overlay
-        // shows what the estimate points at rather than what a press would
-        // change. Those differ whenever you're already on the right window, and
+        // shows what the estimate points at, not what a press would
+        // change. Those differ whenever you are already on the right window, and
         // a diagnostic that goes blank when it agrees with you is no use.
         let window = GazeFocus.shared.gazedTarget()
         var point = reading.flatMap { profile?.point(for: $0) }
         // The fit is linear and will extrapolate past the edges when you look
         // beyond the outermost calibration dots. Pinned to the screen so it
-        // rides the edge rather than disappearing, which would read as the
+        // rides the edge instead of disappearing, which would read as the
         // tracker having lost you.
         if let chosen, let estimate = point,
            let screen = NSScreen.screens.first(where: { displayID(of: $0) == chosen }) {
@@ -111,16 +111,16 @@ final class GazeDebugOverlay {
             // The ratio is the whole decision: below the margin it acts, above
             // it the two displays are too close to call and it leaves focus be.
             let ratio = ranked.count > 1 ? ranked[0].distance / max(ranked[1].distance, 0.0001) : 0
-            // Two lines rather than one. This used to be a single row that ran
+            // Two lines, not one. This used to be a single row that ran
             // wider than the display and got clipped at both ends, which took
             // out the window reason on the right and the display scores on the
-            // left — the two things it exists to tell you.
+            // left - the two things it exists to tell you.
             caption = String(format: "%@   ratio %.2f / %.2f   window: %@",
                              scores, ratio, gazeMargin, window.reason)
                 + String(format: "\nhead %.2f/%.2f   eye %.2f/%.2f   lid %.2f   pose %.2f/%.2f/%.2f",
                          reading.headX, reading.headY, reading.eyeX, reading.eyeY,
                          reading.lidY, reading.faceYaw, reading.facePitch, reading.faceRoll)
-            // A blank screen otherwise reads as a broken tracker rather than an
+            // A blank screen otherwise reads as a broken tracker, not an
             // old calibration that predates the dot having anywhere to go.
             if !profile.hasPoints {
                 caption += "   (recalibrate to place the dot)"
@@ -146,7 +146,7 @@ final class GazeDotView: NSView {
     var trail: [CGPoint] = []
     var isChosen = false
     /// The window a gesture would act on, in AX coordinates. Named around
-    /// `NSView.window` rather than shadowing it.
+    /// `NSView.window` instead of shadowing it.
     var windowRect: CGRect?
     var caption = ""
 
@@ -165,7 +165,7 @@ final class GazeDotView: NSView {
         }
 
         // The window itself, which is the answer now that gaze picks between
-        // windows on one screen rather than only between screens.
+        // windows on one screen, not only between screens.
         if let windowRect {
             let local = NSRect(x: windowRect.minX - screenRect.minX,
                                y: windowRect.minY - screenRect.minY,
@@ -179,7 +179,7 @@ final class GazeDotView: NSView {
         }
 
         // Older positions fade out, which turns jitter into something you can
-        // see the shape of rather than a dot that twitches.
+        // see the shape of, not a dot that twitches.
         for (index, point) in trail.enumerated() {
             let age = Double(index + 1) / Double(trail.count)
             let local = CGPoint(x: point.x - screenRect.minX, y: point.y - screenRect.minY)
@@ -200,7 +200,7 @@ final class GazeDotView: NSView {
         }
 
         guard isChosen, !caption.isEmpty else { return }
-        // Laid out in a bounded rect rather than drawn at a point. Drawing at a
+        // Laid out in a bounded rect, not drawn at a point. Drawing at a
         // point puts everything on one line however wide that gets, and the box
         // was centred without a clamp, so on a narrow display the caption ran
         // off both edges at once and lost the two fields worth reading.

@@ -11,7 +11,7 @@ func carbonToEventFlags(_ mods: UInt32) -> CGEventFlags {
     return flags
 }
 
-/// Picks which display you're looking at, so a gesture can start on the window
+/// Picks which display you are looking at, so a gesture can start on the window
 /// there instead of whatever happened to be frontmost.
 ///
 /// Nothing here steals focus on its own. The camera warms while a Shiftly
@@ -73,8 +73,8 @@ final class GazeFocus {
             self?.handle(sample)
         }
         // Clicking a display is you saying which screen you mean, out loud, so
-        // it wins over what the camera thinks for a moment. A monitor rather
-        // than an event tap, so it observes without intercepting anything.
+        // it wins over what the camera thinks for a moment. A monitor, not
+        // an event tap, so it observes without intercepting anything.
         clickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.noteClick()
@@ -112,7 +112,7 @@ final class GazeFocus {
     }
 
     /// Warm the camera once the modifiers have been held long enough to be a
-    /// gesture rather than a copy-paste, so an estimate is ready by the time an
+    /// gesture, not a copy-paste, so an estimate is ready by the time an
     /// arrow arrives.
     private func poll() {
         let held = heldFlags()
@@ -193,14 +193,14 @@ final class GazeFocus {
     /// frames, per axis, or nil when the camera has nothing recent.
     ///
     /// Taking the median across axes independently can in principle name a
-    /// point no single frame reported. That's fine here, and is the point: each
+    /// point no single frame reported. That is fine here, and is the point: each
     /// axis is measured separately anyway, and it keeps one bad landmark fit on
     /// one axis from dragging the others with it.
     func reading() -> GazeSample? {
         var samples = Array(GazeTracker.shared.recent(within: gazeDecisionWindow).suffix(gazeDecisionFrames))
         guard !samples.isEmpty else { return nil }
         // A blink closes the lids over most of the window at once, which the
-        // median can't ride out, and the pupil landmark inside a closed eye is
+        // median cannot ride out, and the pupil landmark inside a closed eye is
         // fiction. Frames below the profile's lid floor are dropped first;
         // when every frame is mid-blink the unfiltered reading stands, which
         // at worst is what every reading was before this filter.
@@ -257,7 +257,7 @@ final class GazeFocus {
     /// Display being looked at right now, or nil when the estimate is off,
     /// stale, or too close to call.
     ///
-    /// Computed on demand from the newest frames rather than read off a running
+    /// Computed on demand from the newest frames, not read off a running
     /// estimate. Nothing to settle, and nothing to get stuck on: the previous
     /// answer has no say in this one.
     func gazedDisplay() -> CGDirectDisplayID? {
@@ -273,15 +273,15 @@ final class GazeFocus {
     /// The window a gesture should start on, or nil to use the normal frontmost
     /// window. Focuses it as a side effect, which is the point.
     ///
-    /// Asked once per gesture, on the opening press. Only the display you aren't
-    /// already on can be claimed by the frontmost-window fallback, so glancing
-    /// around your current screen can't retarget you off a bad reading.
+    /// Asked once per gesture, on the opening press. The frontmost-window
+    /// fallback can claim only the display you are not already on, so glancing
+    /// around your current screen cannot retarget you off a bad reading.
     func gazedWindow() -> AXUIElement? {
         let owner = focusedWindow().flatMap(frame(of:)).map { displayID(of: screenContaining($0)) }
         guard let target = gazedTarget(alreadyOn: owner).pick else { return nil }
-        // Already on it, so there's nothing to move focus to. Checked here
-        // rather than inside gazedTarget, which answers where you're looking
-        // and shouldn't have an opinion about what's focused.
+        // Already on it, so there is nothing to move focus to. Checked here
+        //, not inside gazedTarget, which answers where you are looking
+        // and should not have an opinion about what is focused.
         if let focused = focusedWindow().flatMap(frame(of:)),
            nearlyEqual(focused, target.bounds) { return nil }
 
@@ -293,8 +293,8 @@ final class GazeFocus {
             return nil
         }
         focus(element, pid: target.pid)
-        // Timed because this is the one part of the press that isn't ours: it
-        // waits on other apps to answer, and that's where a slow gesture would
+        // Timed because this is the one part of the press that is not ours: it
+        // waits on other apps to answer, and that is where a slow gesture would
         // now be coming from.
         let camera = ProcessInfo.processInfo.systemUptime - GazeTracker.shared.lastFaceAt
         debugLog(String(format: "gaze retarget to display %u %@: newest frame %.0fms old, window lookup %.0fms",
@@ -303,7 +303,7 @@ final class GazeFocus {
         return element
     }
 
-    /// The window the estimate points at, or why it doesn't point at one.
+    /// The window the estimate points at, or why it does not point at one.
     ///
     /// Two ways to land on one. If the calibration can place the dot and the dot
     /// is inside a window, that window wins, which is what makes this work
@@ -311,9 +311,9 @@ final class GazeFocus {
     /// whatever is frontmost over there, which needs no placement fit.
     ///
     /// Returns a reason even when it declines, because the debug overlay reads
-    /// this and going blank is useless exactly when you're working out why.
+    /// this and going blank is useless exactly when you are working out why.
     /// Deliberately says nothing about whether the window is already focused:
-    /// that's "would a press change anything", and it lives in `gazedWindow`.
+    /// that is "would a press change anything", and it lives in `gazedWindow`.
     /// It used to live here, which darkened the overlay whenever you looked at
     /// the window you were already in.
     enum Target {
@@ -377,7 +377,7 @@ final class GazeFocus {
         if picked == nil {
             // Nothing clearly under the estimate. A different display still
             // means the frontmost window there; the same display means leave
-            // whatever you're working on alone.
+            // whatever you are working on alone.
             guard owner != display else { return .none(declined) }
             picked = candidates.first
         }
@@ -395,7 +395,7 @@ final class GazeFocus {
     ///
     /// `CGWindowListCopyWindowInfo` returns front to back, and the keys used
     /// here (owner, bounds, layer) come back without Screen Recording
-    /// permission. Only window *names* are gated, and those aren't needed.
+    /// permission. Only window *names* are gated, and those are not needed.
     private func windows(on screen: NSScreen) -> [(pid: pid_t, bounds: CGRect)] {
         let area = flipRect(screen.frame)
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -426,7 +426,7 @@ final class GazeFocus {
 
     private func axWindow(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
-        // This runs on the keypress and talks to another process, which might
+        // This runs on the keypress and talks to another process, which can
         // be busy. Bounded so a stalled app costs a fallback, not the gesture.
         AXUIElementSetMessagingTimeout(app, gazeAXTimeout)
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
@@ -443,7 +443,7 @@ final class GazeFocus {
         return nil
     }
 
-    /// Raise through AX rather than NSRunningApplication, which avoids the
+    /// Raise through AX, not NSRunningApplication, which avoids the
     /// activate() availability split and works the same on every version.
     private func focus(_ window: AXUIElement, pid: pid_t) {
         AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)

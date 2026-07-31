@@ -43,10 +43,10 @@ final class GestureEngine {
         if !active {
             // With eye tracking on, the first press starts on whatever window
             // sits on the display being looked at, falling back to the normal
-            // frontmost window when it's off, stale, or already the right one.
+            // frontmost window when it is off, stale, or already the right one.
             let gazed = GazeFocus.shared.gazedWindow()
             // Fall through to the normal window if the gaze pick turns out to
-            // have no readable frame, rather than failing the whole gesture.
+            // have no readable frame instead of failing the whole gesture.
             var target = gazed
             if target == nil || frame(of: target!) == nil {
                 if gazed != nil { debugLog("gaze pick had no readable frame, using frontmost") }
@@ -97,7 +97,7 @@ final class GestureEngine {
         if layer == .halves { seedHalves() }
     }
 
-    /// Start the ladder from the window's current snap position, if it's in one.
+    /// Start the ladder from the window's current snap position, if it is in one.
     private func seedHalves() {
         guard let previewScreen else { return }
         let area = usableFrame(of: previewScreen)
@@ -245,7 +245,7 @@ final class GestureEngine {
             let delta = direction == .left ? -1 : 1
             if let current = slot {
                 var next = current + delta
-                // Endcaps need the edge fully covered; a sixth doesn't qualify.
+                // Endcaps need the edge fully covered; a sixth does not qualify.
                 if (next == fullLeft || next == fullRight) && sixth != 0 { next = current }
                 slot = min(fullRight, max(fullLeft, next))
             } else if let match = matchingSlot(original, in: area) {

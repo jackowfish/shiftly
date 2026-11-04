@@ -27,7 +27,7 @@ This _does_ mean that we are grabbing these modifier keys in essentially any con
 | Layer | Default | Arrows |
 |---|---|---|
 | Halves & quarters | Cmd | Left/Right snap to halves, Up maximizes, Down centers. Combine them for quarters - Left then Up and you get the top-left quarter. |
-| Thirds & sixths | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down will grab the upper or lower half of whatever slot you're in. |
+| Thirds & sixths | Cmd+Opt | Left/Right walk the window across the screen: left 1/3, left 2/3, middle 1/3, right 2/3, right 1/3. Up/Down will grab the upper or lower half of whatever slot you're in. On a portrait display it's turned sideways: Up/Down walk the rows and Left/Right take the left or right half, so sixths come out roughly square. |
 | Displays | Cmd+Shift | Sends the window to the display in that direction, keeping its relative size and position. |
 
 ## Eye Tracking (Beta)
@@ -78,13 +78,25 @@ There's a `Package.swift` anyway, purely so editors resolve the module. Without 
 
 `swift build` however works to type-checks everything and gives you a bare binary; it just isn't actually something you can publish.
 
+## Testing
+
+```sh
+swift test             # gesture logic: halves, thirds, sixths, display moves
+./tools/axcheck.sh     # real window moves between every pair of displays
+```
+
+`swift test` drives the gesture logic against a modeled desk, so it needs no displays or permissions.
+
+`axcheck.sh` opens an invisible, click-through test window and moves it between every pair of connected displays through the same Accessibility calls the app uses, then checks where it ended up. It never touches your windows and never becomes the active window, so it's fine to run while you work. It needs Accessibility for your terminal and at least two displays, and skips otherwise.
+
 ## Layout
 
 ```
 Sources/App/        menu bar app, settings, updater
 Sources/Snapping/   hotkeys, the gesture ladders, geometry, the overlay
 Sources/Gaze/       camera, calibration, the profile, window targeting
-tools/              gaze_eval.py and the calibration screenshot renderer
+Tests/              swift test suite for the gesture logic
+tools/              axcheck.sh, gaze_eval.py and the calibration screenshot renderer
 build.sh            assembles and signs the .app
 Package.swift       for editors and `swift build`, not for shipping
 ```

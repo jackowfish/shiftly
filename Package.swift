@@ -11,6 +11,8 @@ let package = Package(
     name: "Shiftly",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "Shiftly", path: "Sources")
+        .executableTarget(name: "Shiftly", path: "Sources"),
+        // `swift test` runs these. They drive the gesture logic with no displays or AX.
+        .testTarget(name: "ShiftlyTests", dependencies: ["Shiftly"], path: "Tests"),
     ]
 )

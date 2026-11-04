@@ -52,7 +52,39 @@ func frame(of window: AXUIElement) -> CGRect? {
     return CGRect(origin: origin, size: size)
 }
 
+/// Bumped on every write, so a newer write cancels the retries of an older one.
+private var frameWriteGeneration = 0
+
+/// Moves and resizes the window, then reads the frame back and writes again until it matches.
+///
+/// A size write takes the limits of the display the window is on at that moment.
+/// On a move to another display, the first size write can get the old display's limits.
 func setFrame(_ rect: CGRect, on window: AXUIElement) {
+    frameWriteGeneration += 1
+    writeFrame(rect, on: window)
+    verifyFrame(rect, on: window, generation: frameWriteGeneration, attemptsLeft: frameWriteRetries, previous: nil)
+}
+
+private let frameWriteRetries = 4
+private let frameWriteSettle: TimeInterval = 0.03
+
+private func verifyFrame(_ rect: CGRect, on window: AXUIElement, generation: Int,
+                         attemptsLeft: Int, previous: CGRect?) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + frameWriteSettle) {
+        guard generation == frameWriteGeneration, let actual = frame(of: window) else { return }
+        if actual.matches(rect, tolerance: 2) { return }
+        // The frame did not change since the last write, so the app sets its own limit.
+        // Terminals that snap to a character grid do this.
+        if attemptsLeft == 0 || previous.map({ actual.matches($0, tolerance: 1) }) == true {
+            debugLog("window kept \(actual) instead of \(rect)")
+            return
+        }
+        writeFrame(rect, on: window)
+        verifyFrame(rect, on: window, generation: generation, attemptsLeft: attemptsLeft - 1, previous: actual)
+    }
+}
+
+private func writeFrame(_ rect: CGRect, on window: AXUIElement) {
     // Chromium mangles AX moves while AXEnhancedUserInterface is set;
     // clear it for the write and restore after.
     var pid: pid_t = 0
@@ -83,11 +115,16 @@ func setFrame(_ rect: CGRect, on window: AXUIElement) {
         }
     }
 
-    // Position, size, position again: apps that clamp their own size
-    // (terminals) shift out from under the first write.
-    writePosition()
-    if let value = AXValueCreate(.cgSize, &size) {
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+    func writeSize() {
+        if let value = AXValueCreate(.cgSize, &size) {
+            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+        }
     }
+
+    // Size first, so a large window fits the destination before it moves there.
+    // The second pair repeats the writes after the move. Terminals shift when they clamp their own size.
+    writeSize()
+    writePosition()
+    writeSize()
     writePosition()
 }
